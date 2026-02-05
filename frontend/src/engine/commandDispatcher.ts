@@ -23,6 +23,9 @@ import type {
   SetVisibilityOp,
   SetLockedOp,
   UpdateSceneOp,
+  AddKeyframeOp,
+  UpdateKeyframeOp,
+  DeleteKeyframeOp,
 } from "../types/operations";
 import type { Message } from "../types/protocol";
 
@@ -316,6 +319,37 @@ class CommandDispatcher {
         }
         break;
       }
+
+      case "keyframe.add": {
+        // No previous state needed for add - inverse is delete
+        return op;
+      }
+
+      case "keyframe.update": {
+        const keyframe = doc.keyframes[op.keyframeId];
+        if (keyframe) {
+          return {
+            ...op,
+            previous: {
+              frame: keyframe.frame,
+              value: keyframe.value,
+              easing: keyframe.easing,
+            },
+          } as UpdateKeyframeOp;
+        }
+        break;
+      }
+
+      case "keyframe.delete": {
+        const keyframe = doc.keyframes[op.keyframeId];
+        if (keyframe) {
+          return {
+            ...op,
+            previous: { ...keyframe },
+          } as DeleteKeyframeOp;
+        }
+        break;
+      }
     }
 
     return op;
@@ -411,6 +445,42 @@ class CommandDispatcher {
           changes: op.previous,
           previous: op.changes,
         };
+      }
+
+      case "keyframe.add": {
+        // Inverse of add is delete
+        return {
+          id: crypto.randomUUID(),
+          type: "keyframe.delete",
+          timestamp: Date.now(),
+          clientSeq: 0,
+          keyframeId: op.keyframe.id,
+          trackId: op.trackId,
+          previous: op.keyframe,
+        } as DeleteKeyframeOp;
+      }
+
+      case "keyframe.update": {
+        if (!op.previous) return null;
+        return {
+          ...op,
+          id: crypto.randomUUID(),
+          changes: op.previous,
+          previous: op.changes,
+        };
+      }
+
+      case "keyframe.delete": {
+        if (!op.previous) return null;
+        // Inverse of delete is add
+        return {
+          id: crypto.randomUUID(),
+          type: "keyframe.add",
+          timestamp: Date.now(),
+          clientSeq: 0,
+          trackId: op.trackId,
+          keyframe: op.previous,
+        } as AddKeyframeOp;
       }
 
       default:
@@ -568,6 +638,75 @@ class CommandDispatcher {
           ...doc,
           project: { ...doc.project, name: op.name },
         });
+        break;
+      }
+
+      case "keyframe.add": {
+        const newKeyframes = { ...doc.keyframes };
+        newKeyframes[op.keyframe.id] = op.keyframe;
+
+        // Add to track's keys array (maintain sorted order by frame)
+        const track = doc.tracks[op.trackId];
+        if (track) {
+          const newKeys = [...track.keys];
+          let insertIdx = newKeys.length;
+          for (let i = 0; i < newKeys.length; i++) {
+            const existingKey = doc.keyframes[newKeys[i]];
+            if (existingKey && existingKey.frame > op.keyframe.frame) {
+              insertIdx = i;
+              break;
+            }
+          }
+          newKeys.splice(insertIdx, 0, op.keyframe.id);
+
+          store.setDocument({
+            ...doc,
+            keyframes: newKeyframes,
+            tracks: {
+              ...doc.tracks,
+              [op.trackId]: { ...track, keys: newKeys },
+            },
+          });
+        } else {
+          store.setDocument({ ...doc, keyframes: newKeyframes });
+        }
+        break;
+      }
+
+      case "keyframe.update": {
+        const keyframe = doc.keyframes[op.keyframeId];
+        if (!keyframe) return;
+        store.setDocument({
+          ...doc,
+          keyframes: {
+            ...doc.keyframes,
+            [op.keyframeId]: { ...keyframe, ...op.changes },
+          },
+        });
+        break;
+      }
+
+      case "keyframe.delete": {
+        const newKeyframes = { ...doc.keyframes };
+        delete newKeyframes[op.keyframeId];
+
+        // Remove from track's keys
+        const track = doc.tracks[op.trackId];
+        if (track) {
+          store.setDocument({
+            ...doc,
+            keyframes: newKeyframes,
+            tracks: {
+              ...doc.tracks,
+              [op.trackId]: {
+                ...track,
+                keys: track.keys.filter((k) => k !== op.keyframeId),
+              },
+            },
+          });
+        } else {
+          store.setDocument({ ...doc, keyframes: newKeyframes });
+        }
         break;
       }
     }

@@ -6,7 +6,11 @@ import { useWebSocket } from "../hooks/useWebSocket";
 import { usePresence } from "../hooks/usePresence";
 import { Stage } from "../engine/Stage";
 import { commandDispatcher } from "../engine/commandDispatcher";
-import { CanvasSurface } from "../components/canvas/CanvasSurface";
+import {
+  CanvasSurface,
+  type DragType,
+} from "../components/canvas/CanvasSurface";
+import type { Bounds } from "../engine/commands";
 import { CursorOverlay } from "../components/canvas/CursorOverlay";
 import { Toolbar, type Tool } from "../components/editor/Toolbar";
 import { PropertiesPanel } from "../components/editor/PropertiesPanel";
@@ -22,7 +26,12 @@ import type {
   OperationNackPayload,
   OperationBroadcastPayload,
 } from "../types/protocol";
-import type { SymbolData, InDocument, ObjectNode } from "../types/document";
+import type {
+  SymbolData,
+  InDocument,
+  ObjectNode,
+  Keyframe,
+} from "../types/document";
 
 interface EditingContext {
   objectId: string | null; // null = scene root
@@ -59,10 +68,17 @@ export function EditorPage() {
   // Drag state
   const dragRef = useRef<{
     objectId: string;
+    dragType: DragType;
     startX: number;
     startY: number;
+    // Original transform values
     origX: number;
     origY: number;
+    origSx: number;
+    origSy: number;
+    origR: number;
+    // Bounds at drag start (for scale/rotate calculations)
+    bounds: Bounds | null;
   } | null>(null);
 
   // Stable send ref for WS
@@ -188,6 +204,15 @@ export function EditorPage() {
     }
   }, [doc, editingStack.length]);
 
+  // Scene metadata (for layout) - get from document directly, not WASM
+  // Defined early because callbacks below depend on it
+  const scene = useMemo(() => {
+    if (!doc) return null;
+    // Get the first scene from the document
+    const sceneId = Object.keys(doc.scenes)[0];
+    return sceneId ? doc.scenes[sceneId] : null;
+  }, [doc]);
+
   // Reload engine when document changes (e.g. from drag moves)
   const docVersionRef = useRef(0);
   useEffect(() => {
@@ -287,16 +312,27 @@ export function EditorPage() {
   );
 
   const handleDragStart = useCallback(
-    (objectId: string, x: number, y: number) => {
+    (
+      objectId: string,
+      x: number,
+      y: number,
+      dragType: DragType,
+      bounds: Bounds | null,
+    ) => {
       if (!doc) return;
       const obj = doc.objects[objectId];
       if (!obj) return;
       dragRef.current = {
         objectId,
+        dragType,
         startX: x,
         startY: y,
         origX: obj.transform.x,
         origY: obj.transform.y,
+        origSx: obj.transform.sx,
+        origSy: obj.transform.sy,
+        origR: obj.transform.r,
+        bounds,
       };
     },
     [doc],
@@ -305,10 +341,6 @@ export function EditorPage() {
   const handleDragMove = useCallback((x: number, y: number) => {
     const drag = dragRef.current;
     if (!drag) return;
-    const dx = x - drag.startX;
-    const dy = y - drag.startY;
-    const newX = drag.origX + dx;
-    const newY = drag.origY + dy;
 
     // During drag: apply directly to store for visual feedback (no undo tracking)
     // This is an optimistic visual update - the real operation is dispatched on drag end
@@ -318,13 +350,91 @@ export function EditorPage() {
     const obj = currentDoc.objects[drag.objectId];
     if (!obj) return;
 
+    let newTransform = { ...obj.transform };
+
+    if (drag.dragType === "move") {
+      // Simple move
+      const dx = x - drag.startX;
+      const dy = y - drag.startY;
+      newTransform.x = drag.origX + dx;
+      newTransform.y = drag.origY + dy;
+    } else if (drag.dragType === "rotate") {
+      // Rotation around object center
+      if (drag.bounds) {
+        const centerX = (drag.bounds.minX + drag.bounds.maxX) / 2;
+        const centerY = (drag.bounds.minY + drag.bounds.maxY) / 2;
+
+        // Calculate angle from center to current mouse position
+        const startAngle = Math.atan2(
+          drag.startY - centerY,
+          drag.startX - centerX,
+        );
+        const currentAngle = Math.atan2(y - centerY, x - centerX);
+        const deltaAngle = currentAngle - startAngle;
+
+        // Convert to degrees and add to original rotation
+        newTransform.r = drag.origR + (deltaAngle * 180) / Math.PI;
+      }
+    } else if (drag.dragType && drag.dragType.startsWith("scale-")) {
+      // Scale from corner handle
+      if (drag.bounds) {
+        const { minX, minY, maxX, maxY } = drag.bounds;
+        const origWidth = maxX - minX;
+        const origHeight = maxY - minY;
+
+        if (origWidth > 0 && origHeight > 0) {
+          // Determine which corner is the anchor (opposite to dragged handle)
+          let anchorX: number, anchorY: number;
+          switch (drag.dragType) {
+            case "scale-nw":
+              anchorX = maxX;
+              anchorY = maxY;
+              break;
+            case "scale-ne":
+              anchorX = minX;
+              anchorY = maxY;
+              break;
+            case "scale-sw":
+              anchorX = maxX;
+              anchorY = minY;
+              break;
+            case "scale-se":
+            default:
+              anchorX = minX;
+              anchorY = minY;
+              break;
+          }
+
+          // Calculate new width/height based on mouse position relative to anchor
+          const newWidth = Math.abs(x - anchorX);
+          const newHeight = Math.abs(y - anchorY);
+
+          // Calculate scale factors
+          const scaleX = newWidth / origWidth;
+          const scaleY = newHeight / origHeight;
+
+          newTransform.sx = drag.origSx * scaleX;
+          newTransform.sy = drag.origSy * scaleY;
+
+          // Adjust position to keep anchor fixed
+          // The position offset depends on which handle is being dragged
+          if (drag.dragType === "scale-nw" || drag.dragType === "scale-sw") {
+            newTransform.x = drag.origX + (origWidth - newWidth);
+          }
+          if (drag.dragType === "scale-nw" || drag.dragType === "scale-ne") {
+            newTransform.y = drag.origY + (origHeight - newHeight);
+          }
+        }
+      }
+    }
+
     store.setDocument({
       ...currentDoc,
       objects: {
         ...currentDoc.objects,
         [drag.objectId]: {
           ...obj,
-          transform: { ...obj.transform, x: newX, y: newY },
+          transform: newTransform,
         },
       },
     });
@@ -337,7 +447,7 @@ export function EditorPage() {
     const drag = dragRef.current;
     if (!drag) return;
 
-    // Get current position after drag
+    // Get current transform after drag
     const currentDoc = useEditorStore.getState().document;
     if (!currentDoc) {
       dragRef.current = null;
@@ -349,28 +459,61 @@ export function EditorPage() {
       return;
     }
 
-    const finalX = obj.transform.x;
-    const finalY = obj.transform.y;
+    const finalTransform = obj.transform;
 
-    // Only dispatch if position actually changed
-    if (finalX !== drag.origX || finalY !== drag.origY) {
-      // Reset to original position first (so the operation captures correct previous state)
+    // Check if any transform values changed
+    const hasChanged =
+      finalTransform.x !== drag.origX ||
+      finalTransform.y !== drag.origY ||
+      finalTransform.sx !== drag.origSx ||
+      finalTransform.sy !== drag.origSy ||
+      finalTransform.r !== drag.origR;
+
+    if (hasChanged) {
+      // Reset to original transform first (so the operation captures correct previous state)
       useEditorStore.getState().setDocument({
         ...currentDoc,
         objects: {
           ...currentDoc.objects,
           [drag.objectId]: {
             ...obj,
-            transform: { ...obj.transform, x: drag.origX, y: drag.origY },
+            transform: {
+              ...obj.transform,
+              x: drag.origX,
+              y: drag.origY,
+              sx: drag.origSx,
+              sy: drag.origSy,
+              r: drag.origR,
+            },
           },
         },
       });
+
+      // Build the transform changes based on what was dragged
+      const transformChanges: Record<string, number> = {};
+
+      if (drag.dragType === "move") {
+        transformChanges.x = finalTransform.x;
+        transformChanges.y = finalTransform.y;
+      } else if (drag.dragType === "rotate") {
+        transformChanges.r = finalTransform.r;
+      } else if (drag.dragType && drag.dragType.startsWith("scale-")) {
+        transformChanges.sx = finalTransform.sx;
+        transformChanges.sy = finalTransform.sy;
+        // Also include position if it changed (for anchor-based scaling)
+        if (finalTransform.x !== drag.origX) {
+          transformChanges.x = finalTransform.x;
+        }
+        if (finalTransform.y !== drag.origY) {
+          transformChanges.y = finalTransform.y;
+        }
+      }
 
       // Now dispatch the operation (this will apply the change and track for undo)
       commandDispatcher.dispatch({
         type: "object.transform",
         objectId: drag.objectId,
-        transform: { x: finalX, y: finalY },
+        transform: transformChanges,
       });
     }
 
@@ -503,6 +646,66 @@ export function EditorPage() {
     [doc, scene],
   );
 
+  // --- Keyframe handlers ---
+
+  const handleAddKeyframe = useCallback(
+    (objectId: string, frame: number, property: string) => {
+      if (!doc || !currentContext) return;
+
+      const timeline = doc.timelines[currentContext.timelineId];
+      if (!timeline) return;
+
+      // Find or we'll need to create a track for this object/property
+      let trackId = timeline.tracks.find((tid) => {
+        const track = doc.tracks[tid];
+        return (
+          track && track.objectId === objectId && track.property === property
+        );
+      });
+
+      // For now, if no track exists, we can't add keyframes
+      // (Track creation would be a separate operation)
+      if (!trackId) {
+        console.warn("No track found for object/property, cannot add keyframe");
+        return;
+      }
+
+      const keyframeId = crypto.randomUUID();
+      const obj = doc.objects[objectId];
+      if (!obj) return;
+
+      // Get current value based on property
+      let value: unknown = 0;
+      if (property === "transform.x") value = obj.transform.x;
+      else if (property === "transform.y") value = obj.transform.y;
+
+      const keyframe: Keyframe = {
+        id: keyframeId,
+        frame,
+        value: value as number,
+        easing: "linear",
+      };
+
+      commandDispatcher.dispatch({
+        type: "keyframe.add",
+        trackId,
+        keyframe,
+      });
+    },
+    [doc, currentContext],
+  );
+
+  const handleDeleteKeyframe = useCallback(
+    (keyframeId: string, trackId: string) => {
+      commandDispatcher.dispatch({
+        type: "keyframe.delete",
+        keyframeId,
+        trackId,
+      });
+    },
+    [],
+  );
+
   const handleNewDocument = useCallback(() => {
     // Navigate to projects list to create a new project
     navigate("/projects");
@@ -528,14 +731,6 @@ export function EditorPage() {
   const handleFitToScreen = useCallback(() => {
     // Placeholder
   }, []);
-
-  // Scene metadata (for layout) - get from document directly, not WASM
-  const scene = useMemo(() => {
-    if (!doc) return null;
-    // Get the first scene from the document
-    const sceneId = Object.keys(doc.scenes)[0];
-    return sceneId ? doc.scenes[sceneId] : null;
-  }, [doc]);
 
   // Total frames for the currently-editing timeline
   const totalFrames = useMemo(() => {
@@ -591,12 +786,14 @@ export function EditorPage() {
             width={scene.width}
             height={scene.height}
             selectedObjectId={selectedObjectId}
+            activeTool={activeTool}
             onMouseMove={throttledSendCursor}
             onObjectClick={handleObjectClick}
             onDoubleClick={handleCanvasDoubleClick}
             onDragStart={handleDragStart}
             onDragMove={handleDragMove}
             onDragEnd={handleDragEnd}
+            onCreateObject={handleCreateObject}
           />
           <CursorOverlay
             canvasWidth={scene.width}
@@ -633,6 +830,8 @@ export function EditorPage() {
           breadcrumb={breadcrumb}
           onEnterSymbol={handleEnterSymbol}
           onNavigateBreadcrumb={handleNavigateBreadcrumb}
+          onAddKeyframe={handleAddKeyframe}
+          onDeleteKeyframe={handleDeleteKeyframe}
         />
       )}
     </div>

@@ -16,6 +16,27 @@ export interface DrawCommand {
 }
 
 /**
+ * Bounding box for an object.
+ */
+export interface Bounds {
+  minX: number;
+  minY: number;
+  maxX: number;
+  maxY: number;
+}
+
+/**
+ * Handle types for transform operations.
+ */
+export type HandleType =
+  | "scale-nw"
+  | "scale-ne"
+  | "scale-sw"
+  | "scale-se"
+  | "rotate"
+  | null;
+
+/**
  * Execute a list of draw commands on a Canvas2D context.
  * @param ctx - The canvas rendering context
  * @param commands - Draw commands from WASM engine
@@ -161,7 +182,98 @@ function buildPath(commands: PathCommand[]): Path2D {
 }
 
 /**
- * Render a selection outline around a command.
+ * Get the bounding box of a path in local coordinates.
+ */
+export function getBoundsFromPath(pathCommands: PathCommand[]): Bounds {
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+
+  for (const cmd of pathCommands) {
+    if (cmd.length === 0) continue;
+
+    const op = cmd[0];
+    switch (op) {
+      case "M":
+      case "L":
+        minX = Math.min(minX, cmd[1]);
+        minY = Math.min(minY, cmd[2]);
+        maxX = Math.max(maxX, cmd[1]);
+        maxY = Math.max(maxY, cmd[2]);
+        break;
+      case "C":
+        // For bezier, include all control points for simplicity
+        minX = Math.min(minX, cmd[1], cmd[3], cmd[5]);
+        minY = Math.min(minY, cmd[2], cmd[4], cmd[6]);
+        maxX = Math.max(maxX, cmd[1], cmd[3], cmd[5]);
+        maxY = Math.max(maxY, cmd[2], cmd[4], cmd[6]);
+        break;
+      case "Q":
+        minX = Math.min(minX, cmd[1], cmd[3]);
+        minY = Math.min(minY, cmd[2], cmd[4]);
+        maxX = Math.max(maxX, cmd[1], cmd[3]);
+        maxY = Math.max(maxY, cmd[2], cmd[4]);
+        break;
+    }
+  }
+
+  // Handle empty path
+  if (!isFinite(minX)) {
+    return { minX: 0, minY: 0, maxX: 0, maxY: 0 };
+  }
+
+  return { minX, minY, maxX, maxY };
+}
+
+/**
+ * Transform a point using an affine transform matrix.
+ */
+export function transformPoint(
+  x: number,
+  y: number,
+  transform: number[],
+): { x: number; y: number } {
+  const [a, b, c, d, e, f] = transform;
+  return {
+    x: a * x + c * y + e,
+    y: b * x + d * y + f,
+  };
+}
+
+/**
+ * Get the bounding box of a command in world coordinates (after transform).
+ */
+export function getWorldBounds(cmd: DrawCommand): Bounds | null {
+  if (!cmd.path || cmd.path.length === 0 || !cmd.transform) return null;
+
+  const localBounds = getBoundsFromPath(cmd.path);
+
+  // Transform all 4 corners and find the axis-aligned bounding box
+  const corners = [
+    transformPoint(localBounds.minX, localBounds.minY, cmd.transform),
+    transformPoint(localBounds.maxX, localBounds.minY, cmd.transform),
+    transformPoint(localBounds.minX, localBounds.maxY, cmd.transform),
+    transformPoint(localBounds.maxX, localBounds.maxY, cmd.transform),
+  ];
+
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+
+  for (const c of corners) {
+    minX = Math.min(minX, c.x);
+    minY = Math.min(minY, c.y);
+    maxX = Math.max(maxX, c.x);
+    maxY = Math.max(maxY, c.y);
+  }
+
+  return { minX, minY, maxX, maxY };
+}
+
+/**
+ * Render a selection outline around a command with transform handles.
  */
 export function renderSelectionOutline(
   ctx: CanvasRenderingContext2D,
@@ -169,15 +281,113 @@ export function renderSelectionOutline(
 ): void {
   if (!cmd.path || cmd.path.length === 0 || !cmd.transform) return;
 
+  // Get world bounds for handles
+  const worldBounds = getWorldBounds(cmd);
+  if (!worldBounds) return;
+
+  // Draw dashed outline in local space (follows rotation)
   ctx.save();
   applyTransform(ctx, cmd.transform);
-
   const path = buildPath(cmd.path);
-
   ctx.strokeStyle = "#0066ff";
   ctx.lineWidth = 2;
   ctx.setLineDash([5, 5]);
   ctx.stroke(path);
+  ctx.restore();
+
+  // Draw handles in world space (axis-aligned)
+  ctx.save();
+  ctx.setLineDash([]);
+
+  const handleSize = 8;
+  const { minX, minY, maxX, maxY } = worldBounds;
+
+  // Corner handles (white fill, blue stroke)
+  const corners = [
+    { x: minX, y: minY }, // NW
+    { x: maxX, y: minY }, // NE
+    { x: minX, y: maxY }, // SW
+    { x: maxX, y: maxY }, // SE
+  ];
+
+  for (const corner of corners) {
+    ctx.fillStyle = "#ffffff";
+    ctx.strokeStyle = "#0066ff";
+    ctx.lineWidth = 1.5;
+    ctx.fillRect(
+      corner.x - handleSize / 2,
+      corner.y - handleSize / 2,
+      handleSize,
+      handleSize,
+    );
+    ctx.strokeRect(
+      corner.x - handleSize / 2,
+      corner.y - handleSize / 2,
+      handleSize,
+      handleSize,
+    );
+  }
+
+  // Rotation handle (circle above center)
+  const centerX = (minX + maxX) / 2;
+  const rotateY = minY - 25;
+
+  // Line from top center to rotation handle
+  ctx.beginPath();
+  ctx.moveTo(centerX, minY);
+  ctx.lineTo(centerX, rotateY);
+  ctx.strokeStyle = "#0066ff";
+  ctx.lineWidth = 1.5;
+  ctx.stroke();
+
+  // Rotation circle
+  ctx.beginPath();
+  ctx.arc(centerX, rotateY, 6, 0, Math.PI * 2);
+  ctx.fillStyle = "#ffffff";
+  ctx.fill();
+  ctx.strokeStyle = "#0066ff";
+  ctx.stroke();
 
   ctx.restore();
+}
+
+/**
+ * Hit test for transform handles.
+ * Returns the handle type if the point is over a handle, null otherwise.
+ */
+export function hitTestHandle(
+  x: number,
+  y: number,
+  cmd: DrawCommand,
+): HandleType {
+  if (!cmd.path || cmd.path.length === 0 || !cmd.transform) return null;
+
+  const worldBounds = getWorldBounds(cmd);
+  if (!worldBounds) return null;
+
+  const handleRadius = 10; // Slightly larger than visual for easier clicking
+  const { minX, minY, maxX, maxY } = worldBounds;
+
+  // Test rotation handle first (highest priority)
+  const centerX = (minX + maxX) / 2;
+  const rotateY = minY - 25;
+  if (Math.hypot(x - centerX, y - rotateY) < handleRadius) {
+    return "rotate";
+  }
+
+  // Test corner handles
+  const corners: { type: HandleType; x: number; y: number }[] = [
+    { type: "scale-nw", x: minX, y: minY },
+    { type: "scale-ne", x: maxX, y: minY },
+    { type: "scale-sw", x: minX, y: maxY },
+    { type: "scale-se", x: maxX, y: maxY },
+  ];
+
+  for (const corner of corners) {
+    if (Math.hypot(x - corner.x, y - corner.y) < handleRadius) {
+      return corner.type;
+    }
+  }
+
+  return null;
 }

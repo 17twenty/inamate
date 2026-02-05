@@ -22,6 +22,9 @@ interface TimelinePanelProps {
   breadcrumb: BreadcrumbEntry[];
   onEnterSymbol: (objectId: string) => void;
   onNavigateBreadcrumb: (index: number) => void;
+  // Keyframe editing
+  onAddKeyframe?: (objectId: string, frame: number, property: string) => void;
+  onDeleteKeyframe?: (keyframeId: string, trackId: string) => void;
 }
 
 export function TimelinePanel({
@@ -39,6 +42,8 @@ export function TimelinePanel({
   breadcrumb,
   onEnterSymbol,
   onNavigateBreadcrumb,
+  onAddKeyframe,
+  onDeleteKeyframe,
 }: TimelinePanelProps) {
   const scrubRef = useRef<HTMLDivElement>(null);
 
@@ -59,18 +64,29 @@ export function TimelinePanel({
   })();
 
   // Collect keyframe positions for each layer object
+  // Map: objectId -> Map of frame -> { keyframeId, trackId }
   const timeline = doc.timelines[editingTimelineId];
-  const keyframesByObject = new Map<string, Set<number>>();
+  const keyframesByObject = new Map<
+    string,
+    Map<number, { keyframeId: string; trackId: string }>
+  >();
+  // Also track which objects have tracks (for knowing where to add keyframes)
+  const tracksByObject = new Map<string, string>();
   if (timeline) {
     for (const trackId of timeline.tracks) {
       const track = doc.tracks[trackId];
       if (!track) continue;
-      const frames = keyframesByObject.get(track.objectId) || new Set();
+      tracksByObject.set(track.objectId, trackId);
+      const framesMap =
+        keyframesByObject.get(track.objectId) ||
+        new Map<number, { keyframeId: string; trackId: string }>();
       for (const kfId of track.keys) {
         const kf = doc.keyframes[kfId];
-        if (kf) frames.add(kf.frame);
+        if (kf) {
+          framesMap.set(kf.frame, { keyframeId: kfId, trackId });
+        }
       }
-      keyframesByObject.set(track.objectId, frames);
+      keyframesByObject.set(track.objectId, framesMap);
     }
   }
 
@@ -106,6 +122,24 @@ export function TimelinePanel({
       }
     },
     [doc, onEnterSymbol],
+  );
+
+  // Handle double-click on a frame cell to add/remove keyframe
+  const handleFrameCellDoubleClick = useCallback(
+    (objectId: string, frame: number, e: React.MouseEvent) => {
+      e.stopPropagation();
+      const objKeyframes = keyframesByObject.get(objectId);
+      const existingKeyframe = objKeyframes?.get(frame);
+
+      if (existingKeyframe && onDeleteKeyframe) {
+        // Delete existing keyframe
+        onDeleteKeyframe(existingKeyframe.keyframeId, existingKeyframe.trackId);
+      } else if (onAddKeyframe) {
+        // Add new keyframe at this frame
+        onAddKeyframe(objectId, frame, "transform.x");
+      }
+    },
+    [keyframesByObject, onAddKeyframe, onDeleteKeyframe],
   );
 
   const currentTime = (currentFrame / fps).toFixed(2);
@@ -227,21 +261,27 @@ export function TimelinePanel({
                     obj.id === selectedObjectId ? "bg-blue-900/10" : ""
                   }`}
                 >
-                  {Array.from({ length: visibleFrames }, (_, i) => (
-                    <div
-                      key={i}
-                      className={`relative h-full flex-shrink-0 border-r border-gray-800/20 ${
-                        i === 0 ? "bg-gray-700/30" : ""
-                      }`}
-                      style={{ width: frameWidth }}
-                    >
-                      {objKeyframes?.has(i) && (
-                        <span className="absolute inset-0 flex items-center justify-center text-[8px] leading-none text-yellow-400">
-                          &#9670;
-                        </span>
-                      )}
-                    </div>
-                  ))}
+                  {Array.from({ length: visibleFrames }, (_, i) => {
+                    const hasKeyframe = objKeyframes?.has(i);
+                    return (
+                      <div
+                        key={i}
+                        className={`relative h-full flex-shrink-0 border-r border-gray-800/20 cursor-pointer hover:bg-gray-700/30 ${
+                          i === 0 ? "bg-gray-700/30" : ""
+                        }`}
+                        style={{ width: frameWidth }}
+                        onDoubleClick={(e) =>
+                          handleFrameCellDoubleClick(obj.id, i, e)
+                        }
+                      >
+                        {hasKeyframe && (
+                          <span className="absolute inset-0 flex items-center justify-center text-[8px] leading-none text-yellow-400">
+                            &#9670;
+                          </span>
+                        )}
+                      </div>
+                    );
+                  })}
                 </div>
               );
             })}

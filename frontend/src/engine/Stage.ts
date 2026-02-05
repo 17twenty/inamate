@@ -1,6 +1,11 @@
 import type { InDocument, Scene } from "../types/document";
-import type { DrawCommand } from "./commands";
-import { executeCommands, renderSelectionOutline } from "./commands";
+import type { DrawCommand, HandleType, Bounds } from "./commands";
+import {
+  executeCommands,
+  renderSelectionOutline,
+  hitTestHandle,
+  getWorldBounds,
+} from "./commands";
 import * as wasm from "./wasmBridge";
 
 export interface StageEvents {
@@ -190,6 +195,35 @@ export class Stage {
     if (!this.wasmReady) return null;
     const result = wasm.hitTest(x, y);
     return result || null;
+  }
+
+  /**
+   * Hit test for transform handles on the selected object.
+   * Returns the handle type if clicking a handle, null otherwise.
+   */
+  hitTestHandle(x: number, y: number): HandleType {
+    if (!this.selectedObjectId) return null;
+
+    const cmd = this.lastCommands.find(
+      (c) => c.objectId === this.selectedObjectId,
+    );
+    if (!cmd) return null;
+
+    return hitTestHandle(x, y, cmd);
+  }
+
+  /**
+   * Get the world bounds of the selected object.
+   */
+  getSelectedObjectBounds(): Bounds | null {
+    if (!this.selectedObjectId) return null;
+
+    const cmd = this.lastCommands.find(
+      (c) => c.objectId === this.selectedObjectId,
+    );
+    if (!cmd) return null;
+
+    return getWorldBounds(cmd);
   }
 
   // --- Private Methods ---

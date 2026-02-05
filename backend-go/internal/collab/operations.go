@@ -70,6 +70,12 @@ func (ds *DocumentState) applyOperationLocked(op Operation) error {
 		return ds.applySceneUpdate(op)
 	case "project.rename":
 		return ds.applyProjectRename(op)
+	case "keyframe.add":
+		return ds.applyKeyframeAdd(op)
+	case "keyframe.update":
+		return ds.applyKeyframeUpdate(op)
+	case "keyframe.delete":
+		return ds.applyKeyframeDelete(op)
 	default:
 		return fmt.Errorf("unknown operation type: %s", op.Type)
 	}
@@ -306,6 +312,144 @@ func (ds *DocumentState) applySceneUpdate(op Operation) error {
 
 func (ds *DocumentState) applyProjectRename(op Operation) error {
 	ds.doc.Project.Name = op.Name
+	return nil
+}
+
+func (ds *DocumentState) applyKeyframeAdd(op Operation) error {
+	// Validate required fields
+	if op.KeyframeID == "" {
+		return fmt.Errorf("keyframeId is required")
+	}
+	if op.TrackID == "" {
+		return fmt.Errorf("trackId is required")
+	}
+	if op.Frame == nil {
+		return fmt.Errorf("frame is required")
+	}
+
+	// Get the track
+	track, ok := ds.doc.Tracks[op.TrackID]
+	if !ok {
+		return fmt.Errorf("track not found: %s", op.TrackID)
+	}
+
+	// Create the keyframe
+	easing := document.EasingLinear
+	if op.Easing != "" {
+		easing = document.EasingType(op.Easing)
+	}
+
+	keyframe := document.Keyframe{
+		ID:     op.KeyframeID,
+		Frame:  *op.Frame,
+		Value:  op.Value,
+		Easing: easing,
+	}
+
+	// Add to keyframes map
+	ds.doc.Keyframes[op.KeyframeID] = keyframe
+
+	// Add to track's keys array (maintain sorted order by frame)
+	inserted := false
+	newKeys := make([]string, 0, len(track.Keys)+1)
+	for _, keyID := range track.Keys {
+		existingKey, exists := ds.doc.Keyframes[keyID]
+		if exists && !inserted && existingKey.Frame > *op.Frame {
+			newKeys = append(newKeys, op.KeyframeID)
+			inserted = true
+		}
+		newKeys = append(newKeys, keyID)
+	}
+	if !inserted {
+		newKeys = append(newKeys, op.KeyframeID)
+	}
+	track.Keys = newKeys
+	ds.doc.Tracks[op.TrackID] = track
+
+	return nil
+}
+
+func (ds *DocumentState) applyKeyframeUpdate(op Operation) error {
+	if op.KeyframeID == "" {
+		return fmt.Errorf("keyframeId is required")
+	}
+
+	keyframe, ok := ds.doc.Keyframes[op.KeyframeID]
+	if !ok {
+		return fmt.Errorf("keyframe not found: %s", op.KeyframeID)
+	}
+
+	// Update fields if provided
+	if op.Frame != nil {
+		keyframe.Frame = *op.Frame
+	}
+	if op.Value != nil {
+		keyframe.Value = op.Value
+	}
+	if op.Easing != "" {
+		keyframe.Easing = document.EasingType(op.Easing)
+	}
+
+	ds.doc.Keyframes[op.KeyframeID] = keyframe
+
+	// If frame changed, re-sort the track's keys
+	if op.Frame != nil && op.TrackID != "" {
+		track, ok := ds.doc.Tracks[op.TrackID]
+		if ok {
+			// Remove and re-insert to maintain sort order
+			newKeys := make([]string, 0, len(track.Keys))
+			for _, keyID := range track.Keys {
+				if keyID != op.KeyframeID {
+					newKeys = append(newKeys, keyID)
+				}
+			}
+
+			// Re-insert at correct position
+			inserted := false
+			sortedKeys := make([]string, 0, len(newKeys)+1)
+			for _, keyID := range newKeys {
+				existingKey, exists := ds.doc.Keyframes[keyID]
+				if exists && !inserted && existingKey.Frame > *op.Frame {
+					sortedKeys = append(sortedKeys, op.KeyframeID)
+					inserted = true
+				}
+				sortedKeys = append(sortedKeys, keyID)
+			}
+			if !inserted {
+				sortedKeys = append(sortedKeys, op.KeyframeID)
+			}
+			track.Keys = sortedKeys
+			ds.doc.Tracks[op.TrackID] = track
+		}
+	}
+
+	return nil
+}
+
+func (ds *DocumentState) applyKeyframeDelete(op Operation) error {
+	if op.KeyframeID == "" {
+		return fmt.Errorf("keyframeId is required")
+	}
+	if op.TrackID == "" {
+		return fmt.Errorf("trackId is required")
+	}
+
+	// Remove from track's keys
+	track, ok := ds.doc.Tracks[op.TrackID]
+	if ok {
+		newKeys := make([]string, 0, len(track.Keys))
+		for _, keyID := range track.Keys {
+			if keyID != op.KeyframeID {
+				newKeys = append(newKeys, keyID)
+			}
+		}
+		track.Keys = newKeys
+		ds.doc.Tracks[op.TrackID] = track
+	}
+
+	// Remove from keyframes map
+	delete(ds.doc.Keyframes, op.KeyframeID)
+
 	return nil
 }
 

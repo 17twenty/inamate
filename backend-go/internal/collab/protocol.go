@@ -100,6 +100,19 @@ type Operation struct {
 	// For project.rename
 	Name         string `json:"name,omitempty"`
 	PreviousName string `json:"previousName,omitempty"`
+
+	// For keyframe operations
+	KeyframeID        string          `json:"keyframeId,omitempty"`
+	TrackID           string          `json:"trackId,omitempty"`
+	TimelineID        string          `json:"timelineId,omitempty"`
+	Frame             *int            `json:"frame,omitempty"`
+	Value             json.RawMessage `json:"value,omitempty"`
+	Easing            string          `json:"easing,omitempty"`
+	PreviousFrame     *int            `json:"previousFrame,omitempty"`
+	PreviousValue     json.RawMessage `json:"previousValue,omitempty"`
+	PreviousEasing    string          `json:"previousEasing,omitempty"`
+	PreviousKeyframe  json.RawMessage `json:"previousKeyframe,omitempty"`
+	PreviousTrackKeys []string        `json:"previousTrackKeys,omitempty"`
 }
 
 // OperationSubmitPayload is the payload for op.submit messages
