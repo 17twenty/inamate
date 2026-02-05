@@ -1,0 +1,124 @@
+version: "3"
+
+vars:
+  DB_URL: "postgres://inamate:inamate_dev@localhost:5433/inamate?sslmode=disable"
+
+tasks:
+  # --- Infrastructure ---
+  infra:
+    desc: Start local dev infrastructure (Postgres, MinIO)
+    cmds:
+      - docker compose up -d postgres minio
+
+  infra:stop:
+    desc: Stop local dev infrastructure
+    cmds:
+      - docker compose down
+
+  # --- Database ---
+  migrate:up:
+    desc: Run database migrations
+    dir: backend-go
+    cmds:
+      - go run -tags 'postgres' github.com/golang-migrate/migrate/v4/cmd/migrate@latest
+        -path internal/db/migrations
+        -database "{{.DB_URL}}" up
+
+  migrate:down:
+    desc: Rollback database migrations
+    dir: backend-go
+    cmds:
+      - go run -tags 'postgres' github.com/golang-migrate/migrate/v4/cmd/migrate@latest
+        -path internal/db/migrations
+        -database "{{.DB_URL}}" down
+
+  sqlc:
+    desc: Generate type-safe Go from SQL queries
+    dir: backend-go
+    cmds:
+      - go run github.com/sqlc-dev/sqlc/cmd/sqlc@latest generate
+
+  # --- Backend ---
+  backend:
+    desc: Run the Go backend server
+    dir: backend-go
+    cmds:
+      - go run ./cmd/server
+
+  backend:build:
+    desc: Build the Go backend binary
+    dir: backend-go
+    cmds:
+      - go build -o bin/server ./cmd/server
+
+  backend:test:
+    desc: Run backend tests
+    dir: backend-go
+    cmds:
+      - go test ./...
+
+  backend:fmt:
+    desc: Format backend Go code
+    dir: backend-go
+    cmds:
+      - gofmt -w .
+
+  # --- Frontend ---
+  frontend:
+    desc: Run the frontend dev server
+    dir: frontend
+    cmds:
+      - npm run dev
+
+  frontend:build:
+    desc: Build frontend for production
+    dir: frontend
+    cmds:
+      - npm run build
+
+  frontend:test:
+    desc: Run frontend tests
+    dir: frontend
+    cmds:
+      - npm run test -- --run
+
+  frontend:lint:
+    desc: Lint frontend code
+    dir: frontend
+    cmds:
+      - npm run lint
+
+  frontend:fmt:
+    desc: Format frontend code
+    dir: frontend
+    cmds:
+      - npx prettier --write "src/**/*.{ts,tsx}"
+
+  # --- Combined ---
+  dev:
+    desc: Start everything (infra + backend + frontend)
+    deps: [infra]
+    cmds:
+      - task --parallel backend frontend
+
+  setup:
+    desc: First-time setup (install deps, start infra, run migrations)
+    cmds:
+      - task: infra
+      - cd frontend && npm install
+      - cd backend-go && go mod download
+      - sleep 2
+      - task: migrate:up
+    silent: false
+
+  test:
+    desc: Run all tests
+    cmds:
+      - task: backend:test
+      - task: frontend:test
+
+  build:
+    desc: Build everything
+    cmds:
+      - task: backend:build
+      - task: frontend:build
