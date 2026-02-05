@@ -22,6 +22,7 @@ import type {
   ReparentObjectOp,
   SetVisibilityOp,
   SetLockedOp,
+  UpdateSceneOp,
 } from "../types/operations";
 import type { Message } from "../types/protocol";
 
@@ -298,6 +299,23 @@ class CommandDispatcher {
         }
         break;
       }
+
+      case "scene.update": {
+        const scene = doc.scenes[op.sceneId];
+        if (scene) {
+          const previous: UpdateSceneOp["previous"] = {};
+          if (op.changes.name !== undefined) previous.name = scene.name;
+          if (op.changes.width !== undefined) previous.width = scene.width;
+          if (op.changes.height !== undefined) previous.height = scene.height;
+          if (op.changes.background !== undefined)
+            previous.background = scene.background;
+          return {
+            ...op,
+            previous,
+          } as UpdateSceneOp;
+        }
+        break;
+      }
     }
 
     return op;
@@ -382,6 +400,16 @@ class CommandDispatcher {
           id: crypto.randomUUID(),
           locked: op.previous,
           previous: op.locked,
+        };
+      }
+
+      case "scene.update": {
+        if (!op.previous) return null;
+        return {
+          ...op,
+          id: crypto.randomUUID(),
+          changes: op.previous,
+          previous: op.changes,
         };
       }
 

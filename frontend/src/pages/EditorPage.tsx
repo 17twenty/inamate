@@ -22,7 +22,7 @@ import type {
   OperationNackPayload,
   OperationBroadcastPayload,
 } from "../types/protocol";
-import type { SymbolData, InDocument } from "../types/document";
+import type { SymbolData, InDocument, ObjectNode } from "../types/document";
 
 interface EditingContext {
   objectId: string | null; // null = scene root
@@ -412,6 +412,97 @@ export function EditorPage() {
     setSelectedObjectId(null);
   }, []);
 
+  // --- Properties panel handlers ---
+
+  const handleSceneUpdate = useCallback(
+    (changes: Partial<typeof scene>) => {
+      if (!scene) return;
+      commandDispatcher.dispatch({
+        type: "scene.update",
+        sceneId: scene.id,
+        changes,
+      });
+    },
+    [scene],
+  );
+
+  const handleObjectUpdate = useCallback(
+    (
+      objectId: string,
+      changes: {
+        transform?: Partial<typeof selectedObject.transform>;
+        style?: Partial<typeof selectedObject.style>;
+      },
+    ) => {
+      if (changes.transform) {
+        commandDispatcher.dispatch({
+          type: "object.transform",
+          objectId,
+          transform: changes.transform,
+        });
+      }
+      if (changes.style) {
+        commandDispatcher.dispatch({
+          type: "object.style",
+          objectId,
+          style: changes.style,
+        });
+      }
+    },
+    [],
+  );
+
+  // --- Object creation ---
+
+  const handleCreateObject = useCallback(
+    (x: number, y: number, tool: Tool) => {
+      if (!doc || !scene) return;
+
+      const objectId = crypto.randomUUID();
+      const defaultSize = 100;
+
+      // Build the new object based on tool type
+      const newObject: ObjectNode = {
+        id: objectId,
+        type: tool === "rect" ? "ShapeRect" : "ShapeEllipse",
+        parent: scene.root,
+        children: [],
+        transform: {
+          x: x - defaultSize / 2,
+          y: y - defaultSize / 2,
+          sx: 1,
+          sy: 1,
+          r: 0,
+          ax: 0,
+          ay: 0,
+        },
+        style: {
+          fill: "#4a90d9",
+          stroke: "#2d5a87",
+          strokeWidth: 2,
+          opacity: 1,
+        },
+        visible: true,
+        locked: false,
+        data:
+          tool === "rect"
+            ? { width: defaultSize, height: defaultSize }
+            : { rx: defaultSize / 2, ry: defaultSize / 2 },
+      };
+
+      commandDispatcher.dispatch({
+        type: "object.create",
+        object: newObject,
+        parentId: scene.root,
+      });
+
+      // Auto-select the new object and switch to select tool
+      setSelectedObjectId(objectId);
+      setActiveTool("select");
+    },
+    [doc, scene],
+  );
+
   const handleNewDocument = useCallback(() => {
     // Navigate to projects list to create a new project
     navigate("/projects");
@@ -515,7 +606,14 @@ export function EditorPage() {
         </div>
 
         {/* Properties panel (right) */}
-        {showProperties && <PropertiesPanel selectedObject={selectedObject} />}
+        {showProperties && (
+          <PropertiesPanel
+            selectedObject={selectedObject}
+            scene={scene}
+            onSceneUpdate={handleSceneUpdate}
+            onObjectUpdate={handleObjectUpdate}
+          />
+        )}
       </div>
 
       {/* Timeline (bottom) */}
