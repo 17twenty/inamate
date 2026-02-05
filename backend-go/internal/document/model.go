@@ -109,3 +109,57 @@ type Asset struct {
 	URL  string          `json:"url"`
 	Meta json.RawMessage `json:"meta"`
 }
+
+// NewEmptyDocument creates an empty document for a new project
+func NewEmptyDocument(projectID, projectName, sceneID, rootID, timelineID string) *InDocument {
+	return &InDocument{
+		Project: Project{
+			ID:           projectID,
+			Name:         projectName,
+			Version:      1,
+			FPS:          24,
+			CreatedAt:    "", // Will be set by caller
+			UpdatedAt:    "",
+			Scenes:       []string{sceneID},
+			Assets:       []string{},
+			RootTimeline: timelineID,
+		},
+		Scenes: map[string]Scene{
+			sceneID: {
+				ID:         sceneID,
+				Name:       "Scene 1",
+				Width:      1280,
+				Height:     720,
+				Background: "#1a1a2e",
+				Root:       rootID,
+			},
+		},
+		Objects: map[string]ObjectNode{
+			rootID: {
+				ID:       rootID,
+				Type:     ObjectTypeGroup,
+				Parent:   nil,
+				Children: []string{},
+				Transform: Transform{
+					X: 0, Y: 0, SX: 1, SY: 1, R: 0, AX: 0, AY: 0,
+				},
+				Style: Style{
+					Fill: "", Stroke: "", StrokeWidth: 0, Opacity: 1,
+				},
+				Visible: true,
+				Locked:  false,
+				Data:    json.RawMessage(`{}`),
+			},
+		},
+		Timelines: map[string]Timeline{
+			timelineID: {
+				ID:     timelineID,
+				Length: 48,
+				Tracks: []string{},
+			},
+		},
+		Tracks:    map[string]Track{},
+		Keyframes: map[string]Keyframe{},
+		Assets:    map[string]Asset{},
+	}
+}

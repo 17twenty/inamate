@@ -112,13 +112,16 @@ export function CanvasSurface({
     [toCanvasCoords, stage, onDoubleClick],
   );
 
+  // The canvas maintains the scene's exact dimensions (set by Stage.resizeCanvas)
+  // and is centered in its container. No stretching - 1:1 pixel mapping.
   return (
     <canvas
       ref={canvasRef}
-      className="block max-h-full max-w-full"
+      className="block shadow-lg"
       style={{
-        aspectRatio: `${width}/${height}`,
         cursor: isDraggingRef.current ? "grabbing" : "default",
+        // Don't set width/height here - Stage.resizeCanvas handles it
+        // This ensures crisp 1:1 rendering without distortion
       }}
       onMouseDown={handleMouseDown}
       onMouseMove={handleMouseMove}

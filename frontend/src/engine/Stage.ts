@@ -1,265 +1,290 @@
-import { Engine } from "./engine";
-import { Renderer } from "../components/canvas/Renderer";
-import type { RenderCommand } from "./renderList";
-import type { InDocument } from "../types/document";
+import type { InDocument, Scene } from "../types/document";
+import type { DrawCommand } from "./commands";
+import { executeCommands, renderSelectionOutline } from "./commands";
+import * as wasm from "./wasmBridge";
 
 export interface StageEvents {
-  /** Called when currentFrame changes (playback or seek). */
   onFrameChange?: (frame: number) => void;
-  /** Called when play/pause state changes. */
-  onPlayStateChange?: (isPlaying: boolean) => void;
+  onPlayStateChange?: (playing: boolean) => void;
+  onSelectionChange?: (objectIds: string[]) => void;
 }
 
 /**
- * Stage owns the render loop and bridges Engine → Renderer.
- *
- * React never sees render commands. The canvas is updated imperatively
- * on each animation frame. React only receives lightweight callbacks
- * (frame number, play state) to update UI chrome like the timeline.
+ * Stage manages the animation loop and canvas rendering.
+ * It bridges the React UI to the WASM engine.
  */
 export class Stage {
-  private engine = new Engine();
-  private renderer: Renderer | null = null;
   private canvas: HTMLCanvasElement | null = null;
+  private ctx: CanvasRenderingContext2D | null = null;
+  private wasmReady = false;
 
-  // Document
-  private doc: InDocument | null = null;
-  private sceneWidth = 0;
-  private sceneHeight = 0;
-  private background = "#000000";
-
-  // Playback
-  private _isPlaying = false;
-  private _currentFrame = 0;
-  private _globalTick = 0;
-  private _fps = 24;
-  private _totalFrames = 48;
-
-  // Selection (drives outline rendering)
-  private _selectedObjectId: string | null = null;
-
-  // Cached render commands (for hit testing — never enters React)
-  private lastCommands: RenderCommand[] = [];
-
-  // rAF loop
-  private animFrameId: number | null = null;
-  private lastTickTime = 0;
-
-  // Events
+  private scene: Scene | null = null;
   private events: StageEvents = {};
 
-  // Dirty flag — avoids redundant evaluate/render when nothing changed
-  private dirty = true;
+  private rafId: number | null = null;
+  private lastFrameTime = 0;
+  private frameInterval = 1000 / 24;
 
-  // --- Setup ---
+  private selectedObjectId: string | null = null;
+  private lastCommands: DrawCommand[] = [];
 
-  /** Attach a canvas element. Creates the Renderer and starts the rAF loop. */
-  attachCanvas(canvas: HTMLCanvasElement): void {
+  // Queue for operations before WASM is ready
+  private pendingDocument: InDocument | null = null;
+  private pendingSelection: string[] | null = null;
+
+  // Device pixel ratio for high-DPI displays
+  private dpr = 1;
+
+  constructor() {}
+
+  /**
+   * Attach the stage to a canvas element.
+   */
+  async attachCanvas(canvas: HTMLCanvasElement): Promise<void> {
     this.canvas = canvas;
-    this.renderer = new Renderer(canvas);
+    this.ctx = canvas.getContext("2d");
 
-    if (this.doc) {
-      canvas.width = this.sceneWidth;
-      canvas.height = this.sceneHeight;
+    // Initialize WASM if not already done
+    if (!this.wasmReady) {
+      await wasm.initWasm();
+      this.wasmReady = true;
+
+      // Process any pending document load
+      if (this.pendingDocument) {
+        this.loadDocumentInternal(this.pendingDocument);
+        this.pendingDocument = null;
+      }
+
+      // Process any pending selection
+      if (this.pendingSelection !== null) {
+        wasm.setSelection(this.pendingSelection);
+        this.pendingSelection = null;
+      }
     }
 
-    this.dirty = true;
+    // Start the render loop
     this.startLoop();
   }
 
-  /** Detach the canvas. Stops the rAF loop and cleans up. */
+  /**
+   * Detach from the canvas and stop the render loop.
+   */
   detachCanvas(): void {
     this.stopLoop();
-    this.renderer = null;
     this.canvas = null;
+    this.ctx = null;
   }
 
-  /** Set event callbacks for UI updates. */
+  /**
+   * Load a document into the engine.
+   * If WASM isn't ready yet, queues the document for loading once it initializes.
+   */
+  loadDocument(doc: InDocument): void {
+    if (!this.wasmReady) {
+      // Queue for later when WASM is ready
+      this.pendingDocument = doc;
+      return;
+    }
+
+    this.loadDocumentInternal(doc);
+  }
+
+  /**
+   * Internal method to load document (assumes WASM is ready).
+   */
+  private loadDocumentInternal(doc: InDocument): void {
+    wasm.loadDocument(doc);
+    this.scene = wasm.getScene();
+    this.updateFrameInterval();
+    this.resizeCanvas();
+  }
+
+  /**
+   * Load the sample document.
+   * Note: This method requires WASM to be ready since it generates the document in WASM.
+   */
+  loadSampleDocument(projectId?: string): void {
+    if (!this.wasmReady) {
+      // Can't queue this one since it generates doc in WASM
+      console.warn(
+        "Stage.loadSampleDocument called before WASM ready, ignoring",
+      );
+      return;
+    }
+
+    wasm.loadSampleDocument(projectId);
+    this.scene = wasm.getScene();
+    this.updateFrameInterval();
+    this.resizeCanvas();
+  }
+
+  /**
+   * Set event handlers.
+   */
   setEvents(events: StageEvents): void {
     this.events = events;
   }
 
-  // --- Document ---
-
-  /** Load or reload a document into the engine. */
-  loadDocument(doc: InDocument): void {
-    this.doc = doc;
-    this.engine.loadDocument(doc);
-
-    // Extract scene metadata
-    const sceneId = doc.project.scenes[0];
-    const scene = sceneId ? doc.scenes[sceneId] : null;
-    if (scene) {
-      this.sceneWidth = scene.width;
-      this.sceneHeight = scene.height;
-      this.background = scene.background;
-    }
-
-    this._fps = doc.project.fps;
-    const rootTl = doc.timelines[doc.project.rootTimeline];
-    this._totalFrames = rootTl?.length || 48;
-
-    // Resize canvas if attached
-    if (this.canvas) {
-      this.canvas.width = this.sceneWidth;
-      this.canvas.height = this.sceneHeight;
-    }
-
-    this.dirty = true;
+  /**
+   * Get the current scene metadata.
+   */
+  getScene(): Scene | null {
+    return this.scene;
   }
 
-  /** Get scene metadata (for layout and overlays). */
-  getScene(): { width: number; height: number; background: string } | null {
-    if (!this.doc) return null;
-    return {
-      width: this.sceneWidth,
-      height: this.sceneHeight,
-      background: this.background,
-    };
+  /**
+   * Set the selected object ID for rendering selection outline.
+   */
+  setSelectedObjectId(objectId: string | null): void {
+    this.selectedObjectId = objectId;
+    const selection = objectId ? [objectId] : [];
+
+    if (!this.wasmReady) {
+      // Queue for later
+      this.pendingSelection = selection;
+      return;
+    }
+
+    wasm.setSelection(selection);
   }
 
-  // --- Playback controls ---
+  // --- Playback Controls ---
+
+  togglePlay(): void {
+    if (!this.wasmReady) return;
+    wasm.togglePlay();
+    this.events.onPlayStateChange?.(wasm.isPlaying());
+  }
 
   play(): void {
-    if (this._isPlaying) return;
-    this._isPlaying = true;
+    if (!this.wasmReady) return;
+    wasm.play();
     this.events.onPlayStateChange?.(true);
   }
 
   pause(): void {
-    if (!this._isPlaying) return;
-    this._isPlaying = false;
+    if (!this.wasmReady) return;
+    wasm.pause();
     this.events.onPlayStateChange?.(false);
   }
 
-  togglePlay(): void {
-    if (this._isPlaying) this.pause();
-    else this.play();
-  }
-
   seek(frame: number): void {
-    const clamped = Math.max(0, Math.min(this._totalFrames - 1, frame));
-    if (clamped === this._currentFrame) return;
-    this._currentFrame = clamped;
-    this.dirty = true;
-    this.events.onFrameChange?.(clamped);
+    if (!this.wasmReady) return;
+    wasm.setPlayhead(frame);
+    this.events.onFrameChange?.(frame);
   }
 
-  // --- Selection ---
-
-  setSelectedObjectId(id: string | null): void {
-    if (id === this._selectedObjectId) return;
-    this._selectedObjectId = id;
-    this.dirty = true;
-  }
-
-  // --- Getters (for React UI to read on demand) ---
-
-  get isPlaying(): boolean {
-    return this._isPlaying;
-  }
-  get currentFrame(): number {
-    return this._currentFrame;
-  }
-  get globalTick(): number {
-    return this._globalTick;
-  }
-  get fps(): number {
-    return this._fps;
-  }
-  get totalFrames(): number {
-    return this._totalFrames;
-  }
-  get selectedObjectId(): string | null {
-    return this._selectedObjectId;
-  }
-
-  // --- Hit testing (reads cached commands, no React involved) ---
-
-  hitTest(canvasX: number, canvasY: number): string | null {
-    if (!this.renderer || this.lastCommands.length === 0) return null;
-    return this.renderer.hitTest(canvasX, canvasY, this.lastCommands);
-  }
-
-  // --- Force re-evaluate (e.g. after drag mutation) ---
-
+  /**
+   * Force a re-render (e.g., during drag operations).
+   */
   invalidate(): void {
-    this.dirty = true;
+    this.render();
   }
 
-  // --- Cleanup ---
+  // --- Hit Testing ---
 
-  dispose(): void {
-    this.stopLoop();
-    this.renderer = null;
-    this.canvas = null;
-    this.doc = null;
-    this.events = {};
+  /**
+   * Perform a hit test at the given canvas coordinates.
+   */
+  hitTest(x: number, y: number): string | null {
+    if (!this.wasmReady) return null;
+    const result = wasm.hitTest(x, y);
+    return result || null;
   }
 
-  // --- The core loop ---
+  // --- Private Methods ---
+
+  private updateFrameInterval(): void {
+    if (!this.wasmReady) return;
+    const fps = wasm.getFPS();
+    this.frameInterval = 1000 / (fps > 0 ? fps : 24);
+  }
+
+  private resizeCanvas(): void {
+    if (!this.canvas || !this.scene || !this.ctx) return;
+
+    // Get device pixel ratio for high-DPI displays (Retina, etc.)
+    this.dpr = window.devicePixelRatio || 1;
+
+    const displayWidth = this.scene.width;
+    const displayHeight = this.scene.height;
+
+    // Set the backing store size (actual pixels) to account for DPR
+    const backingWidth = Math.round(displayWidth * this.dpr);
+    const backingHeight = Math.round(displayHeight * this.dpr);
+
+    if (
+      this.canvas.width !== backingWidth ||
+      this.canvas.height !== backingHeight
+    ) {
+      this.canvas.width = backingWidth;
+      this.canvas.height = backingHeight;
+
+      // Set CSS display size (logical pixels)
+      this.canvas.style.width = `${displayWidth}px`;
+      this.canvas.style.height = `${displayHeight}px`;
+
+      // Scale the context so drawing operations use logical coordinates
+      this.ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
+    }
+  }
 
   private startLoop(): void {
-    if (this.animFrameId !== null) return;
-    this.lastTickTime = 0;
+    if (this.rafId !== null) return;
 
-    const tick = (timestamp: number) => {
-      this.animFrameId = requestAnimationFrame(tick);
-      this.update(timestamp);
+    const loop = (time: number) => {
+      this.rafId = requestAnimationFrame(loop);
+
+      // Skip if WASM isn't ready yet
+      if (!this.wasmReady) return;
+
+      // Check if we should advance frame (if playing)
+      const elapsed = time - this.lastFrameTime;
+      if (wasm.isPlaying() && elapsed >= this.frameInterval) {
+        this.lastFrameTime = time - (elapsed % this.frameInterval);
+
+        // Tick advances frame if playing and returns draw commands
+        this.lastCommands = wasm.tick();
+        this.render();
+
+        // Notify frame change
+        this.events.onFrameChange?.(wasm.getFrame());
+      } else if (!wasm.isPlaying()) {
+        // Even if not playing, render current state
+        this.lastCommands = wasm.render();
+        this.render();
+      }
     };
-    this.animFrameId = requestAnimationFrame(tick);
+
+    this.lastFrameTime = performance.now();
+    this.rafId = requestAnimationFrame(loop);
   }
 
   private stopLoop(): void {
-    if (this.animFrameId !== null) {
-      cancelAnimationFrame(this.animFrameId);
-      this.animFrameId = null;
+    if (this.rafId !== null) {
+      cancelAnimationFrame(this.rafId);
+      this.rafId = null;
     }
   }
 
-  private update(timestamp: number): void {
-    if (!this.doc || !this.renderer) return;
+  private render(): void {
+    if (!this.ctx || !this.scene) return;
 
-    const frameDuration = 1000 / this._fps;
+    // Execute draw commands with DPR scaling for crisp rendering on high-DPI displays
+    executeCommands(
+      this.ctx,
+      this.lastCommands,
+      this.scene.background,
+      this.dpr,
+    );
 
-    if (timestamp - this.lastTickTime >= frameDuration) {
-      this.lastTickTime = timestamp;
-
-      // Always advance globalTick — Symbol animations play regardless
-      this._globalTick++;
-
-      // Advance main timeline only when playing
-      if (this._isPlaying) {
-        this._currentFrame = (this._currentFrame + 1) % this._totalFrames;
-        this.events.onFrameChange?.(this._currentFrame);
-      }
-
-      this.dirty = true;
-    }
-
-    // Only evaluate + render when something changed
-    if (!this.dirty) return;
-    this.dirty = false;
-
-    try {
-      this.lastCommands = this.engine.evaluate(
-        this._globalTick,
-        this._currentFrame,
+    // Render selection outline if any
+    if (this.selectedObjectId) {
+      const selectedCmd = this.lastCommands.find(
+        (cmd) => cmd.objectId === this.selectedObjectId,
       );
-    } catch {
-      this.lastCommands = [];
-    }
-
-    // Render directly to canvas — no React involved
-    this.renderer.render(this.lastCommands, this.background);
-
-    // Selection outline
-    if (this._selectedObjectId) {
-      const cmd = this.lastCommands.find(
-        (c) => c.objectId === this._selectedObjectId,
-      );
-      if (cmd) {
-        this.renderer.renderSelectionOutline(cmd);
+      if (selectedCmd) {
+        renderSelectionOutline(this.ctx, selectedCmd);
       }
     }
   }

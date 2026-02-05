@@ -38,6 +38,13 @@ tasks:
     cmds:
       - go run github.com/sqlc-dev/sqlc/cmd/sqlc@latest generate
 
+  # --- WASM Engine ---
+  wasm:build:
+    desc: Build Go WASM engine for frontend
+    dir: backend-go
+    cmds:
+      - GOOS=js GOARCH=wasm go build -o ../frontend/public/engine.wasm ./cmd/wasm
+
   # --- Backend ---
   backend:
     desc: Run the Go backend server
@@ -120,5 +127,6 @@ tasks:
   build:
     desc: Build everything
     cmds:
+      - task: wasm:build
       - task: backend:build
       - task: frontend:build

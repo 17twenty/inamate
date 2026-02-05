@@ -16,11 +16,14 @@ export function useWebSocket(
   }, [onMessage]);
 
   useEffect(() => {
-    if (!token || !projectId) return;
+    if (!projectId) return;
 
     const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
     const host = window.location.host;
-    const url = `${protocol}//${host}/ws/project/${projectId}?token=${token}`;
+    // Token is optional - local mode works without auth
+    const url = token
+      ? `${protocol}//${host}/ws/project/${projectId}?token=${token}`
+      : `${protocol}//${host}/ws/project/${projectId}`;
 
     let reconnectTimeout: ReturnType<typeof setTimeout>;
     let reconnectDelay = 1000;

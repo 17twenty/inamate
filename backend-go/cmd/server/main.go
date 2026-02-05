@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -19,6 +20,7 @@ import (
 	"github.com/inamate/inamate/backend-go/internal/config"
 	"github.com/inamate/inamate/backend-go/internal/db"
 	"github.com/inamate/inamate/backend-go/internal/db/dbgen"
+	"github.com/inamate/inamate/backend-go/internal/document"
 	mw "github.com/inamate/inamate/backend-go/internal/middleware"
 	"github.com/inamate/inamate/backend-go/internal/project"
 )
@@ -50,7 +52,21 @@ func main() {
 	projectService := project.NewService(queries)
 	projectHandler := project.NewHandler(projectService)
 
-	hub := collab.NewHub()
+	// Document loader for the collaboration hub
+	docLoader := func(projectID string) (*document.InDocument, error) {
+		// Use a background context since this runs in the hub goroutine
+		snap, err := queries.GetLatestSnapshot(context.Background(), projectID)
+		if err != nil {
+			return nil, err
+		}
+		var doc document.InDocument
+		if err := json.Unmarshal(snap.Document, &doc); err != nil {
+			return nil, err
+		}
+		return &doc, nil
+	}
+
+	hub := collab.NewHub(docLoader)
 	go hub.Run()
 
 	r := mux.NewRouter()
@@ -120,34 +136,47 @@ func handleWebSocket(w http.ResponseWriter, r *http.Request, hub *collab.Hub, au
 	vars := mux.Vars(r)
 	projectID := vars["projectId"]
 
-	// Auth via query param
-	token := r.URL.Query().Get("token")
-	if token == "" {
-		http.Error(w, "missing token", http.StatusUnauthorized)
-		return
-	}
+	var userID string
+	var displayName string
 
-	userID, err := authSvc.ValidateToken(token)
-	if err != nil {
-		http.Error(w, "invalid token", http.StatusUnauthorized)
-		return
-	}
+	// Playground project allows anonymous access
+	const playgroundProjectID = "proj_playground"
+	if projectID == playgroundProjectID {
+		// Anonymous user for playground
+		userID = "anon-" + uuid.New().String()[:8]
+		displayName = "Anonymous"
+	} else {
+		// Auth via query param for real projects
+		token := r.URL.Query().Get("token")
+		if token == "" {
+			http.Error(w, "missing token", http.StatusUnauthorized)
+			return
+		}
 
-	// Check membership
-	_, err = queries.GetProjectMember(r.Context(), dbgen.GetProjectMemberParams{
-		ProjectID: projectID,
-		UserID:    userID,
-	})
-	if err != nil {
-		http.Error(w, "not a project member", http.StatusForbidden)
-		return
-	}
+		var err error
+		userID, err = authSvc.ValidateToken(token)
+		if err != nil {
+			http.Error(w, "invalid token", http.StatusUnauthorized)
+			return
+		}
 
-	// Get user display name
-	user, err := authSvc.GetUser(r.Context(), userID)
-	if err != nil {
-		http.Error(w, "user not found", http.StatusInternalServerError)
-		return
+		// Check membership
+		_, err = queries.GetProjectMember(r.Context(), dbgen.GetProjectMemberParams{
+			ProjectID: projectID,
+			UserID:    userID,
+		})
+		if err != nil {
+			http.Error(w, "not a project member", http.StatusForbidden)
+			return
+		}
+
+		// Get user display name
+		user, err := authSvc.GetUser(r.Context(), userID)
+		if err != nil {
+			http.Error(w, "user not found", http.StatusInternalServerError)
+			return
+		}
+		displayName = user.DisplayName
 	}
 
 	conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{
@@ -159,7 +188,7 @@ func handleWebSocket(w http.ResponseWriter, r *http.Request, hub *collab.Hub, au
 	}
 
 	clientID := uuid.New().String()
-	client := collab.NewClient(hub, conn, userID, user.DisplayName, projectID, clientID)
+	client := collab.NewClient(hub, conn, userID, displayName, projectID, clientID)
 
 	hub.Register(client)
 

@@ -67,11 +67,14 @@ func (s *Service) Create(ctx context.Context, name, ownerID string) (*Project, e
 		return nil, fmt.Errorf("add owner as member: %w", err)
 	}
 
-	// Seed default document snapshot
-	sampleDoc := document.NewSampleDocument(projectID)
-	docJSON, err := json.Marshal(sampleDoc)
+	// Seed empty document snapshot
+	sceneID := typeid.NewSceneID()
+	rootID := typeid.NewObjectID()
+	timelineID := typeid.NewTimelineID()
+	emptyDoc := document.NewEmptyDocument(projectID, name, sceneID, rootID, timelineID)
+	docJSON, err := json.Marshal(emptyDoc)
 	if err != nil {
-		return nil, fmt.Errorf("marshal sample document: %w", err)
+		return nil, fmt.Errorf("marshal empty document: %w", err)
 	}
 
 	_, err = s.queries.CreateSnapshot(ctx, dbgen.CreateSnapshotParams{

@@ -9,13 +9,17 @@ export default function App() {
   return (
     <BrowserRouter>
       <Routes>
+        {/* Public routes */}
         <Route path="/" element={<EditorPage />} />
         <Route path="/login" element={<LoginPage />} />
         <Route path="/register" element={<RegisterPage />} />
+
+        {/* Protected routes (require login) */}
         <Route element={<ProtectedRoute />}>
           <Route path="/projects" element={<ProjectListPage />} />
           <Route path="/editor/:projectId" element={<EditorPage />} />
         </Route>
+
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </BrowserRouter>

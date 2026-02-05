@@ -724,6 +724,8 @@ Pipeline:
 ## Milestone 6: v1 upgrades
 
 * Symbols
+We should refer to https://openlab.bmcc.cuny.edu/mmp260-1301-f2019/adobe-animate-symbols/ and https://helpx.adobe.com/animate/using/symbols.html to understand how symbols should work in Inamate.
+
 * Text tool
 * Video export jobs
 * SVG import

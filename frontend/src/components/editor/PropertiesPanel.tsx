@@ -1,22 +1,125 @@
-import type { ObjectNode } from '../../types/document'
+import { useCallback } from "react";
+import type { ObjectNode, Scene, Transform, Style } from "../../types/document";
 
 interface PropertiesPanelProps {
-  selectedObject: ObjectNode | null
+  selectedObject: ObjectNode | null;
+  scene: Scene | null;
+  onSceneUpdate?: (changes: Partial<Scene>) => void;
+  onObjectUpdate?: (
+    objectId: string,
+    changes: { transform?: Partial<Transform>; style?: Partial<Style> },
+  ) => void;
 }
 
-export function PropertiesPanel({ selectedObject }: PropertiesPanelProps) {
+export function PropertiesPanel({
+  selectedObject,
+  scene,
+  onSceneUpdate,
+  onObjectUpdate,
+}: PropertiesPanelProps) {
+  // Show scene properties when nothing is selected
   if (!selectedObject) {
-    return (
-      <div className="w-56 border-l border-gray-800 bg-gray-900 p-3">
-        <h3 className="mb-2 text-xs font-semibold uppercase tracking-wider text-gray-500">
-          Properties
-        </h3>
-        <p className="text-xs text-gray-600">No selection</p>
-      </div>
-    )
+    if (!scene) {
+      return (
+        <div className="w-56 border-l border-gray-800 bg-gray-900 p-3">
+          <h3 className="mb-2 text-xs font-semibold uppercase tracking-wider text-gray-500">
+            Properties
+          </h3>
+          <p className="text-xs text-gray-600">No scene loaded</p>
+        </div>
+      );
+    }
+
+    return <SceneProperties scene={scene} onSceneUpdate={onSceneUpdate} />;
   }
 
-  const { transform, style } = selectedObject
+  return (
+    <ObjectProperties object={selectedObject} onObjectUpdate={onObjectUpdate} />
+  );
+}
+
+// --- Scene Properties ---
+
+interface ScenePropertiesProps {
+  scene: Scene;
+  onSceneUpdate?: (changes: Partial<Scene>) => void;
+}
+
+function SceneProperties({ scene, onSceneUpdate }: ScenePropertiesProps) {
+  const handleChange = useCallback(
+    (field: keyof Scene, value: string | number) => {
+      onSceneUpdate?.({ [field]: value });
+    },
+    [onSceneUpdate],
+  );
+
+  return (
+    <div className="w-56 overflow-y-auto border-l border-gray-800 bg-gray-900 p-3">
+      <h3 className="mb-3 text-xs font-semibold uppercase tracking-wider text-gray-500">
+        Artboard
+      </h3>
+
+      <Section title="Scene">
+        <EditablePropRow
+          label="Name"
+          value={scene.name}
+          onChange={(v) => handleChange("name", v)}
+          type="text"
+        />
+      </Section>
+
+      <Section title="Dimensions">
+        <EditablePropRow
+          label="Width"
+          value={scene.width}
+          onChange={(v) => handleChange("width", parseInt(v) || 0)}
+          type="number"
+        />
+        <EditablePropRow
+          label="Height"
+          value={scene.height}
+          onChange={(v) => handleChange("height", parseInt(v) || 0)}
+          type="number"
+        />
+      </Section>
+
+      <Section title="Background">
+        <ColorPropRow
+          label="Color"
+          value={scene.background}
+          onChange={(v) => handleChange("background", v)}
+        />
+      </Section>
+    </div>
+  );
+}
+
+// --- Object Properties ---
+
+interface ObjectPropertiesProps {
+  object: ObjectNode;
+  onObjectUpdate?: (
+    objectId: string,
+    changes: { transform?: Partial<Transform>; style?: Partial<Style> },
+  ) => void;
+}
+
+function ObjectProperties({ object, onObjectUpdate }: ObjectPropertiesProps) {
+  const { transform, style } = object;
+
+  const handleTransformChange = useCallback(
+    (field: keyof Transform, value: number) => {
+      onObjectUpdate?.(object.id, { transform: { [field]: value } });
+    },
+    [object.id, onObjectUpdate],
+  );
+
+  const handleStyleChange = useCallback(
+    (field: keyof Style, value: string | number) => {
+      onObjectUpdate?.(object.id, { style: { [field]: value } });
+    },
+    [object.id, onObjectUpdate],
+  );
 
   return (
     <div className="w-56 overflow-y-auto border-l border-gray-800 bg-gray-900 p-3">
@@ -26,64 +129,149 @@ export function PropertiesPanel({ selectedObject }: PropertiesPanelProps) {
 
       {/* Object info */}
       <div className="mb-3 border-b border-gray-800 pb-3">
-        <span className="text-xs text-gray-400">{selectedObject.type}</span>
-        <p className="mt-0.5 truncate text-xs text-gray-600" title={selectedObject.id}>
-          {selectedObject.id}
+        <span className="text-xs text-gray-400">{object.type}</span>
+        <p className="mt-0.5 truncate text-xs text-gray-600" title={object.id}>
+          {object.id}
         </p>
       </div>
 
       {/* Transform */}
       <Section title="Transform">
-        <PropRow label="X" value={transform.x.toFixed(1)} />
-        <PropRow label="Y" value={transform.y.toFixed(1)} />
-        <PropRow label="Scale X" value={transform.sx.toFixed(2)} />
-        <PropRow label="Scale Y" value={transform.sy.toFixed(2)} />
-        <PropRow label="Rotation" value={`${((transform.r * 180) / Math.PI).toFixed(1)}`} />
+        <EditablePropRow
+          label="X"
+          value={transform.x.toFixed(1)}
+          onChange={(v) => handleTransformChange("x", parseFloat(v) || 0)}
+          type="number"
+        />
+        <EditablePropRow
+          label="Y"
+          value={transform.y.toFixed(1)}
+          onChange={(v) => handleTransformChange("y", parseFloat(v) || 0)}
+          type="number"
+        />
+        <EditablePropRow
+          label="Scale X"
+          value={transform.sx.toFixed(2)}
+          onChange={(v) => handleTransformChange("sx", parseFloat(v) || 1)}
+          type="number"
+        />
+        <EditablePropRow
+          label="Scale Y"
+          value={transform.sy.toFixed(2)}
+          onChange={(v) => handleTransformChange("sy", parseFloat(v) || 1)}
+          type="number"
+        />
+        <EditablePropRow
+          label="Rotation"
+          value={((transform.r * 180) / Math.PI).toFixed(1)}
+          onChange={(v) =>
+            handleTransformChange("r", ((parseFloat(v) || 0) * Math.PI) / 180)
+          }
+          type="number"
+        />
       </Section>
 
       {/* Style */}
       <Section title="Style">
-        {style.fill && (
-          <div className="mb-1.5 flex items-center gap-2">
-            <div
-              className="h-4 w-4 rounded border border-gray-700"
-              style={{ backgroundColor: style.fill }}
-            />
-            <span className="text-xs text-gray-400">Fill</span>
-            <span className="ml-auto text-xs text-gray-500">{style.fill}</span>
-          </div>
-        )}
-        {style.stroke && (
-          <div className="mb-1.5 flex items-center gap-2">
-            <div
-              className="h-4 w-4 rounded border border-gray-700"
-              style={{ backgroundColor: style.stroke }}
-            />
-            <span className="text-xs text-gray-400">Stroke</span>
-            <span className="ml-auto text-xs text-gray-500">{style.stroke}</span>
-          </div>
-        )}
-        <PropRow label="Stroke W" value={style.strokeWidth.toFixed(1)} />
-        <PropRow label="Opacity" value={`${(style.opacity * 100).toFixed(0)}%`} />
+        <ColorPropRow
+          label="Fill"
+          value={style.fill || "#000000"}
+          onChange={(v) => handleStyleChange("fill", v)}
+        />
+        <ColorPropRow
+          label="Stroke"
+          value={style.stroke || "#000000"}
+          onChange={(v) => handleStyleChange("stroke", v)}
+        />
+        <EditablePropRow
+          label="Stroke W"
+          value={style.strokeWidth.toFixed(1)}
+          onChange={(v) => handleStyleChange("strokeWidth", parseFloat(v) || 0)}
+          type="number"
+        />
+        <EditablePropRow
+          label="Opacity"
+          value={(style.opacity * 100).toFixed(0)}
+          onChange={(v) =>
+            handleStyleChange(
+              "opacity",
+              Math.max(0, Math.min(100, parseFloat(v) || 100)) / 100,
+            )
+          }
+          type="number"
+        />
       </Section>
     </div>
-  )
+  );
 }
 
-function Section({ title, children }: { title: string; children: React.ReactNode }) {
+// --- Shared Components ---
+
+function Section({
+  title,
+  children,
+}: {
+  title: string;
+  children: React.ReactNode;
+}) {
   return (
     <div className="mb-3 border-b border-gray-800 pb-3">
       <h4 className="mb-2 text-xs font-medium text-gray-400">{title}</h4>
       {children}
     </div>
-  )
+  );
 }
 
-function PropRow({ label, value }: { label: string; value: string }) {
+function EditablePropRow({
+  label,
+  value,
+  onChange,
+  type = "text",
+}: {
+  label: string;
+  value: string | number;
+  onChange: (value: string) => void;
+  type?: "text" | "number";
+}) {
   return (
     <div className="mb-1 flex items-center justify-between">
       <span className="text-xs text-gray-500">{label}</span>
-      <span className="text-xs text-gray-300">{value}</span>
+      <input
+        type={type}
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        onKeyDown={(e) => e.stopPropagation()}
+        className="w-20 rounded border border-gray-700 bg-gray-800 px-1.5 py-0.5 text-right text-xs text-gray-300 focus:border-blue-500 focus:outline-none"
+      />
     </div>
-  )
+  );
+}
+
+function ColorPropRow({
+  label,
+  value,
+  onChange,
+}: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+}) {
+  return (
+    <div className="mb-1.5 flex items-center gap-2">
+      <input
+        type="color"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        className="h-5 w-5 cursor-pointer rounded border border-gray-700 bg-transparent"
+      />
+      <span className="text-xs text-gray-400">{label}</span>
+      <input
+        type="text"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        onKeyDown={(e) => e.stopPropagation()}
+        className="ml-auto w-16 rounded border border-gray-700 bg-gray-800 px-1 py-0.5 text-right text-xs text-gray-500 focus:border-blue-500 focus:outline-none"
+      />
+    </div>
+  );
 }

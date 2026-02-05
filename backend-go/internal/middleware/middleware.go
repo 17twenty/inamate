@@ -1,7 +1,9 @@
 package middleware
 
 import (
+	"bufio"
 	"log/slog"
+	"net"
 	"net/http"
 	"time"
 )
@@ -57,4 +59,12 @@ type statusWriter struct {
 func (w *statusWriter) WriteHeader(status int) {
 	w.status = status
 	w.ResponseWriter.WriteHeader(status)
+}
+
+// Hijack implements http.Hijacker for WebSocket support
+func (w *statusWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	if hj, ok := w.ResponseWriter.(http.Hijacker); ok {
+		return hj.Hijack()
+	}
+	return nil, nil, http.ErrNotSupported
 }

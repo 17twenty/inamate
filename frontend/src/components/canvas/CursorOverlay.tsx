@@ -13,6 +13,7 @@ export function CursorOverlay({
   containerRef,
 }: CursorOverlayProps) {
   const presences = useEditorStore((s) => s.presences);
+  const localUserId = useEditorStore((s) => s.localUserId);
   const [layout, setLayout] = useState<{
     offsetX: number;
     offsetY: number;
@@ -48,8 +49,9 @@ export function CursorOverlay({
     updateLayout();
   }, [presences, updateLayout]);
 
+  // Filter out local user's cursor and entries without cursor position
   const entries = Array.from(presences.values()).filter(
-    (p) => p.cursor !== null,
+    (p) => p.cursor !== null && p.userId !== localUserId,
   );
 
   if (!layout) return null;

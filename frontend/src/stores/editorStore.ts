@@ -13,8 +13,10 @@ interface EditorState {
   document: InDocument | null;
   presences: Map<string, PresenceEntry>;
   connected: boolean;
+  localUserId: string | null;
   setDocument: (doc: InDocument) => void;
   setConnected: (connected: boolean) => void;
+  setLocalUserId: (userId: string) => void;
   updateObjectTransform: (
     objectId: string,
     partial: Partial<Transform>,
@@ -29,9 +31,11 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   document: null,
   presences: new Map(),
   connected: false,
+  localUserId: null,
 
   setDocument: (doc) => set({ document: doc }),
   setConnected: (connected) => set({ connected }),
+  setLocalUserId: (userId) => set({ localUserId: userId }),
 
   updateObjectTransform: (objectId, partial) => {
     const doc = get().document;
