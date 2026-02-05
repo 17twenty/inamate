@@ -1,4 +1,4 @@
-import { useRef, useCallback } from "react";
+import { useRef, useCallback, useState } from "react";
 import type { InDocument } from "../../types/document";
 
 export interface BreadcrumbEntry {
@@ -27,6 +27,12 @@ interface TimelinePanelProps {
   onDeleteKeyframe?: (keyframeId: string, trackId: string) => void;
 }
 
+const LAYER_NAME_WIDTH = 144; // w-36 = 9rem = 144px
+const ROW_HEIGHT = 24; // h-6 = 1.5rem = 24px
+const HEADER_HEIGHT = 20; // h-5 = 1.25rem = 20px
+const MIN_PANEL_HEIGHT = 100;
+const MAX_PANEL_HEIGHT = 400;
+
 export function TimelinePanel({
   document: doc,
   currentFrame,
@@ -45,7 +51,9 @@ export function TimelinePanel({
   onAddKeyframe,
   onDeleteKeyframe,
 }: TimelinePanelProps) {
-  const scrubRef = useRef<HTMLDivElement>(null);
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
+  const [panelHeight, setPanelHeight] = useState(192); // Default h-48 = 12rem = 192px
+  const resizingRef = useRef(false);
 
   // Get children of the editing context (scene root or symbol)
   const layerObjects = (() => {
@@ -64,19 +72,15 @@ export function TimelinePanel({
   })();
 
   // Collect keyframe positions for each layer object
-  // Map: objectId -> Map of frame -> { keyframeId, trackId }
   const timeline = doc.timelines[editingTimelineId];
   const keyframesByObject = new Map<
     string,
     Map<number, { keyframeId: string; trackId: string }>
   >();
-  // Also track which objects have tracks (for knowing where to add keyframes)
-  const tracksByObject = new Map<string, string>();
   if (timeline) {
     for (const trackId of timeline.tracks) {
       const track = doc.tracks[trackId];
       if (!track) continue;
-      tracksByObject.set(track.objectId, trackId);
       const framesMap =
         keyframesByObject.get(track.objectId) ||
         new Map<number, { keyframeId: string; trackId: string }>();
@@ -92,6 +96,7 @@ export function TimelinePanel({
 
   const frameWidth = 12;
   const visibleFrames = totalFrames;
+  const gridWidth = visibleFrames * frameWidth;
 
   const handleScrub = useCallback(
     (e: React.MouseEvent<HTMLDivElement>) => {
@@ -124,7 +129,6 @@ export function TimelinePanel({
     [doc, onEnterSymbol],
   );
 
-  // Handle double-click on a frame cell to add/remove keyframe
   const handleFrameCellDoubleClick = useCallback(
     (objectId: string, frame: number, e: React.MouseEvent) => {
       e.stopPropagation();
@@ -132,23 +136,59 @@ export function TimelinePanel({
       const existingKeyframe = objKeyframes?.get(frame);
 
       if (existingKeyframe && onDeleteKeyframe) {
-        // Delete existing keyframe
         onDeleteKeyframe(existingKeyframe.keyframeId, existingKeyframe.trackId);
       } else if (onAddKeyframe) {
-        // Add new keyframe at this frame
         onAddKeyframe(objectId, frame, "transform.x");
       }
     },
     [keyframesByObject, onAddKeyframe, onDeleteKeyframe],
   );
 
+  // Resize handle drag
+  const handleResizeStart = useCallback(
+    (e: React.MouseEvent) => {
+      e.preventDefault();
+      resizingRef.current = true;
+      const startY = e.clientY;
+      const startHeight = panelHeight;
+
+      const handleMouseMove = (moveEvent: MouseEvent) => {
+        if (!resizingRef.current) return;
+        const deltaY = startY - moveEvent.clientY;
+        const newHeight = Math.min(
+          MAX_PANEL_HEIGHT,
+          Math.max(MIN_PANEL_HEIGHT, startHeight + deltaY),
+        );
+        setPanelHeight(newHeight);
+      };
+
+      const handleMouseUp = () => {
+        resizingRef.current = false;
+        document.removeEventListener("mousemove", handleMouseMove);
+        document.removeEventListener("mouseup", handleMouseUp);
+      };
+
+      document.addEventListener("mousemove", handleMouseMove);
+      document.addEventListener("mouseup", handleMouseUp);
+    },
+    [panelHeight],
+  );
+
   const currentTime = (currentFrame / fps).toFixed(2);
 
   return (
-    <div className="flex h-48 flex-col border-t border-gray-800 bg-gray-900">
+    <div
+      className="flex flex-col border-t border-gray-800 bg-gray-900"
+      style={{ height: panelHeight }}
+    >
+      {/* Resize handle */}
+      <div
+        className="h-1 cursor-ns-resize bg-gray-800 hover:bg-blue-600 transition-colors"
+        onMouseDown={handleResizeStart}
+      />
+
       {/* Breadcrumb + transport controls */}
-      <div className="flex items-center gap-3 border-b border-gray-800 px-3 py-1.5">
-        {/* Breadcrumb */}
+      <div className="flex items-center gap-3 border-b border-gray-800 px-3 py-1.5 flex-shrink-0">
         <div className="flex items-center gap-1 text-xs">
           {breadcrumb.map((entry, i) => (
             <span key={i} className="flex items-center gap-1">
@@ -197,58 +237,40 @@ export function TimelinePanel({
         <span className="ml-auto text-xs text-gray-600">{fps} fps</span>
       </div>
 
-      {/* Timeline body */}
-      <div className="flex flex-1 overflow-hidden">
-        {/* Layer names */}
-        <div className="w-36 flex-shrink-0 overflow-y-auto border-r border-gray-800">
-          <div className="h-5 border-b border-gray-800" />
-          {layerObjects.map((obj) => (
-            <div
-              key={obj.id}
-              onClick={() =>
-                onSelectObject(obj.id === selectedObjectId ? null : obj.id)
-              }
-              onDoubleClick={() => handleLayerDoubleClick(obj.id)}
-              className={`flex h-6 cursor-pointer items-center border-b border-gray-800/50 px-2 text-xs ${
-                obj.id === selectedObjectId
-                  ? "bg-blue-900/30 text-blue-300"
-                  : "text-gray-400 hover:bg-gray-800/50"
-              }`}
-            >
-              <span className="mr-2 text-gray-600">{typeIcon(obj.type)}</span>
-              <span className="truncate">{obj.type}</span>
-              {obj.type === "Symbol" && (
-                <span className="ml-auto text-[9px] text-gray-600">
-                  &#9654;
-                </span>
-              )}
-            </div>
-          ))}
-        </div>
-
-        {/* Frame grid */}
-        <div className="flex-1 overflow-x-auto overflow-y-auto">
-          {/* Frame numbers header */}
+      {/* Timeline body - single scrollable area */}
+      <div ref={scrollContainerRef} className="flex-1 overflow-auto">
+        {/* Grid container with fixed layer names column */}
+        <div
+          className="relative"
+          style={{ minWidth: LAYER_NAME_WIDTH + gridWidth }}
+        >
+          {/* Header row */}
           <div
-            className="sticky top-0 z-10 flex h-5 border-b border-gray-800 bg-gray-900"
-            style={{ width: visibleFrames * frameWidth }}
+            className="sticky top-0 z-20 flex"
+            style={{ height: HEADER_HEIGHT }}
           >
-            {Array.from({ length: visibleFrames }, (_, i) => (
-              <div
-                key={i}
-                className="flex-shrink-0 border-r border-gray-800/30 text-center text-[9px] leading-5 text-gray-600"
-                style={{ width: frameWidth }}
-              >
-                {i % 5 === 0 ? i : ""}
-              </div>
-            ))}
+            {/* Empty corner for layer names column */}
+            <div
+              className="sticky left-0 z-30 flex-shrink-0 border-b border-r border-gray-800 bg-gray-900"
+              style={{ width: LAYER_NAME_WIDTH }}
+            />
+            {/* Frame numbers */}
+            <div className="flex border-b border-gray-800 bg-gray-900">
+              {Array.from({ length: visibleFrames }, (_, i) => (
+                <div
+                  key={i}
+                  className="flex-shrink-0 border-r border-gray-800/30 text-center text-[9px] leading-5 text-gray-600"
+                  style={{ width: frameWidth }}
+                >
+                  {i % 5 === 0 ? i : ""}
+                </div>
+              ))}
+            </div>
           </div>
 
-          {/* Layer frame rows + scrub area */}
+          {/* Layer rows */}
           <div
-            ref={scrubRef}
             className="relative"
-            style={{ width: visibleFrames * frameWidth }}
             onMouseDown={handleScrub}
             onMouseMove={handleScrubDrag}
           >
@@ -257,41 +279,83 @@ export function TimelinePanel({
               return (
                 <div
                   key={obj.id}
-                  className={`flex h-6 border-b border-gray-800/30 ${
-                    obj.id === selectedObjectId ? "bg-blue-900/10" : ""
-                  }`}
+                  className="flex"
+                  style={{ height: ROW_HEIGHT }}
                 >
-                  {Array.from({ length: visibleFrames }, (_, i) => {
-                    const hasKeyframe = objKeyframes?.has(i);
-                    return (
-                      <div
-                        key={i}
-                        className={`relative h-full flex-shrink-0 border-r border-gray-800/20 cursor-pointer hover:bg-gray-700/30 ${
-                          i === 0 ? "bg-gray-700/30" : ""
-                        }`}
-                        style={{ width: frameWidth }}
-                        onDoubleClick={(e) =>
-                          handleFrameCellDoubleClick(obj.id, i, e)
-                        }
-                      >
-                        {hasKeyframe && (
-                          <span className="absolute inset-0 flex items-center justify-center text-[8px] leading-none text-yellow-400">
-                            &#9670;
-                          </span>
-                        )}
-                      </div>
-                    );
-                  })}
+                  {/* Layer name - sticky left */}
+                  <div
+                    onClick={() =>
+                      onSelectObject(
+                        obj.id === selectedObjectId ? null : obj.id,
+                      )
+                    }
+                    onDoubleClick={() => handleLayerDoubleClick(obj.id)}
+                    className={`sticky left-0 z-10 flex flex-shrink-0 cursor-pointer items-center border-b border-r border-gray-800/50 bg-gray-900 px-2 text-xs ${
+                      obj.id === selectedObjectId
+                        ? "bg-blue-900/30 text-blue-300"
+                        : "text-gray-400 hover:bg-gray-800/50"
+                    }`}
+                    style={{ width: LAYER_NAME_WIDTH }}
+                  >
+                    <span className="mr-2 text-gray-600">
+                      {typeIcon(obj.type)}
+                    </span>
+                    <span className="truncate">{obj.type}</span>
+                    {obj.type === "Symbol" && (
+                      <span className="ml-auto text-[9px] text-gray-600">
+                        &#9654;
+                      </span>
+                    )}
+                  </div>
+
+                  {/* Frame cells */}
+                  <div
+                    className={`flex border-b border-gray-800/30 ${
+                      obj.id === selectedObjectId ? "bg-blue-900/10" : ""
+                    }`}
+                  >
+                    {Array.from({ length: visibleFrames }, (_, i) => {
+                      const hasKeyframe = objKeyframes?.has(i);
+                      return (
+                        <div
+                          key={i}
+                          className={`relative flex-shrink-0 border-r border-gray-800/20 cursor-pointer hover:bg-gray-700/30 ${
+                            i === 0 ? "bg-gray-700/30" : ""
+                          }`}
+                          style={{ width: frameWidth, height: ROW_HEIGHT }}
+                          onDoubleClick={(e) =>
+                            handleFrameCellDoubleClick(obj.id, i, e)
+                          }
+                        >
+                          {hasKeyframe && (
+                            <span className="absolute inset-0 flex items-center justify-center text-[8px] leading-none text-yellow-400">
+                              &#9670;
+                            </span>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
                 </div>
               );
             })}
 
-            {/* Playhead */}
+            {/* Playhead - positioned over the entire grid */}
             <div
-              className="pointer-events-none absolute top-0 bottom-0 z-20 w-px bg-red-500"
-              style={{ left: currentFrame * frameWidth + frameWidth / 2 }}
+              className="pointer-events-none absolute z-20"
+              style={{
+                left:
+                  LAYER_NAME_WIDTH + currentFrame * frameWidth + frameWidth / 2,
+                top: -HEADER_HEIGHT,
+                bottom: 0,
+                width: 1,
+              }}
             >
-              <div className="absolute -top-5 left-1/2 -translate-x-1/2">
+              <div className="h-full bg-red-500" />
+              <div
+                className="absolute left-1/2 -translate-x-1/2"
+                style={{ top: HEADER_HEIGHT - 5 }}
+              >
                 <div className="h-0 w-0 border-x-[4px] border-t-[5px] border-x-transparent border-t-red-500" />
               </div>
             </div>

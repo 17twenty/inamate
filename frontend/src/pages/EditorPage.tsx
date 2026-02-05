@@ -65,6 +65,9 @@ export function EditorPage() {
   // Editing context stack for nested Symbol editing
   const [editingStack, setEditingStack] = useState<EditingContext[]>([]);
 
+  // Track shift key state for scale modifier
+  const shiftHeldRef = useRef(false);
+
   // Drag state
   const dragRef = useRef<{
     objectId: string;
@@ -79,6 +82,9 @@ export function EditorPage() {
     origR: number;
     // Bounds at drag start (for scale/rotate calculations)
     bounds: Bounds | null;
+    // Original object dimensions (for scale calculations)
+    origWidth: number;
+    origHeight: number;
   } | null>(null);
 
   // Stable send ref for WS
@@ -144,9 +150,14 @@ export function EditorPage() {
     commandDispatcher.clearHistory();
   }, [doc?.project.id]);
 
-  // Undo/Redo keyboard shortcuts
+  // Undo/Redo keyboard shortcuts + modifier key tracking
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
+      // Track shift key for scale modifier
+      if (e.key === "Shift") {
+        shiftHeldRef.current = true;
+      }
+
       // Cmd+Z (Mac) or Ctrl+Z (Windows/Linux)
       if ((e.metaKey || e.ctrlKey) && e.key === "z") {
         e.preventDefault();
@@ -165,8 +176,18 @@ export function EditorPage() {
       }
     };
 
+    const handleKeyUp = (e: KeyboardEvent) => {
+      if (e.key === "Shift") {
+        shiftHeldRef.current = false;
+      }
+    };
+
     window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
+    window.addEventListener("keyup", handleKeyUp);
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+      window.removeEventListener("keyup", handleKeyUp);
+    };
   }, []);
 
   // Wire Stage events to React state (lightweight — only frame number and play state)
@@ -322,6 +343,15 @@ export function EditorPage() {
       if (!doc) return;
       const obj = doc.objects[objectId];
       if (!obj) return;
+
+      // Calculate original dimensions from bounds
+      let origWidth = 0;
+      let origHeight = 0;
+      if (bounds) {
+        origWidth = bounds.maxX - bounds.minX;
+        origHeight = bounds.maxY - bounds.minY;
+      }
+
       dragRef.current = {
         objectId,
         dragType,
@@ -333,6 +363,8 @@ export function EditorPage() {
         origSy: obj.transform.sy,
         origR: obj.transform.r,
         bounds,
+        origWidth,
+        origHeight,
       };
     },
     [doc],
@@ -377,26 +409,49 @@ export function EditorPage() {
       }
     } else if (drag.dragType && drag.dragType.startsWith("scale-")) {
       // Scale from corner handle
-      if (drag.bounds) {
+      if (drag.bounds && drag.origWidth > 0 && drag.origHeight > 0) {
         const { minX, minY, maxX, maxY } = drag.bounds;
-        const origWidth = maxX - minX;
-        const origHeight = maxY - minY;
 
-        if (origWidth > 0 && origHeight > 0) {
-          // Determine which corner is the anchor (opposite to dragged handle)
+        // Check if shift is held (scale from center)
+        const shiftHeld = shiftHeldRef.current;
+
+        if (shiftHeld) {
+          // Shift held: uniform scale from center
+          const centerX = (minX + maxX) / 2;
+          const centerY = (minY + maxY) / 2;
+          const startDist = Math.hypot(
+            drag.startX - centerX,
+            drag.startY - centerY,
+          );
+          const currentDist = Math.hypot(x - centerX, y - centerY);
+
+          if (startDist > 0) {
+            const scaleFactor = currentDist / startDist;
+            newTransform.sx = drag.origSx * scaleFactor;
+            newTransform.sy = drag.origSy * scaleFactor;
+          }
+        } else {
+          // No shift: scale from opposite corner (anchor)
           let anchorX: number, anchorY: number;
+          let signX = 1,
+            signY = 1;
+
           switch (drag.dragType) {
             case "scale-nw":
               anchorX = maxX;
               anchorY = maxY;
+              signX = -1;
+              signY = -1;
               break;
             case "scale-ne":
               anchorX = minX;
               anchorY = maxY;
+              signY = -1;
               break;
             case "scale-sw":
               anchorX = maxX;
               anchorY = minY;
+              signX = -1;
               break;
             case "scale-se":
             default:
@@ -405,24 +460,27 @@ export function EditorPage() {
               break;
           }
 
-          // Calculate new width/height based on mouse position relative to anchor
-          const newWidth = Math.abs(x - anchorX);
-          const newHeight = Math.abs(y - anchorY);
+          // Calculate new dimensions based on mouse position relative to anchor
+          const newWidth = (x - anchorX) * signX;
+          const newHeight = (y - anchorY) * signY;
 
-          // Calculate scale factors
-          const scaleX = newWidth / origWidth;
-          const scaleY = newHeight / origHeight;
+          // Calculate scale factors (prevent negative/zero scale)
+          const scaleX = Math.max(0.01, newWidth / drag.origWidth);
+          const scaleY = Math.max(0.01, newHeight / drag.origHeight);
 
           newTransform.sx = drag.origSx * scaleX;
           newTransform.sy = drag.origSy * scaleY;
 
-          // Adjust position to keep anchor fixed
-          // The position offset depends on which handle is being dragged
+          // Adjust position to keep the anchor corner fixed
+          // The amount to move depends on how much the size changed
+          const deltaWidth = newWidth - drag.origWidth;
+          const deltaHeight = newHeight - drag.origHeight;
+
           if (drag.dragType === "scale-nw" || drag.dragType === "scale-sw") {
-            newTransform.x = drag.origX + (origWidth - newWidth);
+            newTransform.x = drag.origX - deltaWidth;
           }
           if (drag.dragType === "scale-nw" || drag.dragType === "scale-ne") {
-            newTransform.y = drag.origY + (origHeight - newHeight);
+            newTransform.y = drag.origY - deltaHeight;
           }
         }
       }
@@ -605,9 +663,13 @@ export function EditorPage() {
       const defaultSize = 100;
 
       // Build the new object based on tool type
+      // Anchor point differs by shape type:
+      // - Rectangles: path is (0,0) to (w,h), so anchor at center is (w/2, h/2)
+      // - Ellipses: path is centered at (0,0), so anchor at center is (0, 0)
+      const isEllipse = tool === "ellipse";
       const newObject: ObjectNode = {
         id: objectId,
-        type: tool === "rect" ? "ShapeRect" : "ShapeEllipse",
+        type: isEllipse ? "ShapeEllipse" : "ShapeRect",
         parent: scene.root,
         children: [],
         transform: {
@@ -616,8 +678,8 @@ export function EditorPage() {
           sx: 1,
           sy: 1,
           r: 0,
-          ax: 0,
-          ay: 0,
+          ax: isEllipse ? 0 : defaultSize / 2,
+          ay: isEllipse ? 0 : defaultSize / 2,
         },
         style: {
           fill: "#4a90d9",

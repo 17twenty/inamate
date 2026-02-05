@@ -1,30 +1,38 @@
 -- Create system user for owning system resources
-INSERT INTO users (id, email, password, display_name)
-VALUES (
-    'usr_system',
-    'system@inamate.local',
-    '', -- No password - cannot login
-    'System'
-) ON CONFLICT (id) DO NOTHING;
+INSERT INTO
+    users (id, email, password, display_name)
+VALUES
+    (
+        'usr_system',
+        'system@inamate.local',
+        '', -- No password - cannot login
+        'System'
+    )
+ON CONFLICT (id) DO NOTHING;
 
 -- Create the playground project with a well-known ID
-INSERT INTO projects (id, name, owner_id, fps, width, height)
-VALUES (
-    'proj_playground',
-    'Playground',
-    'usr_system',
-    24,
-    1280,
-    720
-) ON CONFLICT (id) DO NOTHING;
+INSERT INTO
+    projects (id, name, owner_id, fps, width, height)
+VALUES
+    (
+        'proj_playground',
+        'Playground',
+        'usr_system',
+        24,
+        1280,
+        720
+    )
+ON CONFLICT (id) DO NOTHING;
 
 -- Create initial snapshot with demo objects
-INSERT INTO project_snapshots (id, project_id, version, document)
-VALUES (
-    'snap_playground_v1',
-    'proj_playground',
-    1,
-    '{
+INSERT INTO
+    project_snapshots (id, project_id, version, document)
+VALUES
+    (
+        'snap_playground_v1',
+        'proj_playground',
+        1,
+        '{
         "project": {
             "id": "proj_playground",
             "name": "Playground",
@@ -63,7 +71,7 @@ VALUES (
                 "type": "ShapeRect",
                 "parent": "obj_root",
                 "children": [],
-                "transform": {"x": 200, "y": 200, "sx": 1, "sy": 1, "r": 0, "ax": 0, "ay": 0},
+                "transform": {"x": 200, "y": 200, "sx": 1, "sy": 1, "r": 0, "ax": 100, "ay": 75},
                 "style": {"fill": "#e94560", "stroke": "#000000", "strokeWidth": 2, "opacity": 1},
                 "visible": true,
                 "locked": false,
@@ -85,7 +93,7 @@ VALUES (
                 "type": "VectorPath",
                 "parent": "obj_root",
                 "children": [],
-                "transform": {"x": 900, "y": 200, "sx": 1, "sy": 1, "r": 0, "ax": 0, "ay": 0},
+                "transform": {"x": 900, "y": 200, "sx": 1, "sy": 1, "r": 0, "ax": 100, "ay": 75},
                 "style": {"fill": "#53d769", "stroke": "#2d6a4f", "strokeWidth": 2, "opacity": 1},
                 "visible": true,
                 "locked": false,
@@ -107,7 +115,7 @@ VALUES (
                 "type": "ShapeRect",
                 "parent": "obj_spinner",
                 "children": [],
-                "transform": {"x": -30, "y": -50, "sx": 1, "sy": 1, "r": 0, "ax": 0, "ay": 0},
+                "transform": {"x": -30, "y": -50, "sx": 1, "sy": 1, "r": 0, "ax": 30, "ay": 50},
                 "style": {"fill": "#f5a623", "stroke": "#c78400", "strokeWidth": 2, "opacity": 1},
                 "visible": true,
                 "locked": false,
@@ -161,4 +169,5 @@ VALUES (
         },
         "assets": {}
     }'::jsonb
-) ON CONFLICT (id) DO NOTHING;
+    )
+ON CONFLICT (id) DO NOTHING;

@@ -550,16 +550,19 @@ class CommandDispatcher {
       case "object.create": {
         const newObjects = { ...doc.objects };
         newObjects[op.object.id] = op.object;
-        // Add to parent's children
+        // Add to parent's children (if not already present)
         if (op.parentId && newObjects[op.parentId]) {
           const parent = newObjects[op.parentId];
-          const children = [...parent.children];
-          if (op.index !== undefined && op.index >= 0) {
-            children.splice(op.index, 0, op.object.id);
-          } else {
-            children.push(op.object.id);
+          // Check if child already exists to prevent duplicates
+          if (!parent.children.includes(op.object.id)) {
+            const children = [...parent.children];
+            if (op.index !== undefined && op.index >= 0) {
+              children.splice(op.index, 0, op.object.id);
+            } else {
+              children.push(op.object.id);
+            }
+            newObjects[op.parentId] = { ...parent, children };
           }
-          newObjects[op.parentId] = { ...parent, children };
         }
         store.setDocument({ ...doc, objects: newObjects });
         break;
