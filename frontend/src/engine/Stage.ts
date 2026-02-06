@@ -105,6 +105,21 @@ export class Stage {
   }
 
   /**
+   * Update the document without resetting playback state.
+   * Used when the document changes during editing (e.g. keyframe recording, moving objects).
+   */
+  updateDocument(doc: InDocument): void {
+    if (!this.wasmReady) {
+      this.pendingDocument = doc;
+      return;
+    }
+    wasm.updateDocument(doc);
+    this.scene = wasm.getScene();
+    this.updateFrameInterval();
+    // Don't resize canvas — scene dimensions haven't changed
+  }
+
+  /**
    * Load the sample document.
    * Note: This method requires WASM to be ready since it generates the document in WASM.
    */

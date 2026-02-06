@@ -175,12 +175,22 @@ function ObjectProperties({ object, onObjectUpdate }: ObjectPropertiesProps) {
       <Section title="Style">
         <ColorPropRow
           label="Fill"
-          value={style.fill || "#000000"}
+          value={style.fill && style.fill !== "none" ? style.fill : "#000000"}
+          isNone={style.fill === "none"}
+          onToggleNone={(none) =>
+            handleStyleChange("fill", none ? "none" : "#000000")
+          }
           onChange={(v) => handleStyleChange("fill", v)}
         />
         <ColorPropRow
           label="Stroke"
-          value={style.stroke || "#000000"}
+          value={
+            style.stroke && style.stroke !== "none" ? style.stroke : "#000000"
+          }
+          isNone={style.stroke === "none"}
+          onToggleNone={(none) =>
+            handleStyleChange("stroke", none ? "none" : "#000000")
+          }
           onChange={(v) => handleStyleChange("stroke", v)}
         />
         <EditablePropRow
@@ -251,26 +261,49 @@ function ColorPropRow({
   label,
   value,
   onChange,
+  isNone = false,
+  onToggleNone,
 }: {
   label: string;
   value: string;
   onChange: (value: string) => void;
+  isNone?: boolean;
+  onToggleNone?: (none: boolean) => void;
 }) {
   return (
     <div className="mb-1.5 flex items-center gap-2">
+      {onToggleNone && (
+        <button
+          onClick={() => onToggleNone(!isNone)}
+          title={
+            isNone
+              ? `Enable ${label.toLowerCase()}`
+              : `Disable ${label.toLowerCase()} (none)`
+          }
+          className={`flex h-5 w-5 items-center justify-center rounded border text-[9px] font-bold ${
+            isNone
+              ? "border-gray-600 bg-gray-700 text-gray-500"
+              : "border-transparent text-transparent"
+          }`}
+        >
+          {isNone ? "∅" : ""}
+        </button>
+      )}
       <input
         type="color"
         value={value}
         onChange={(e) => onChange(e.target.value)}
-        className="h-5 w-5 cursor-pointer rounded border border-gray-700 bg-transparent"
+        className={`h-5 w-5 cursor-pointer rounded border border-gray-700 bg-transparent ${isNone ? "opacity-30" : ""}`}
+        disabled={isNone}
       />
       <span className="text-xs text-gray-400">{label}</span>
       <input
         type="text"
-        value={value}
+        value={isNone ? "none" : value}
         onChange={(e) => onChange(e.target.value)}
         onKeyDown={(e) => e.stopPropagation()}
-        className="ml-auto w-16 rounded border border-gray-700 bg-gray-800 px-1 py-0.5 text-right text-xs text-gray-500 focus:border-blue-500 focus:outline-none"
+        className={`ml-auto w-16 rounded border border-gray-700 bg-gray-800 px-1 py-0.5 text-right text-xs text-gray-500 focus:border-blue-500 focus:outline-none ${isNone ? "italic opacity-50" : ""}`}
+        disabled={isNone}
       />
     </div>
   );

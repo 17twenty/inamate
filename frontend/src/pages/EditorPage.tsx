@@ -32,6 +32,7 @@ import type {
   InDocument,
   ObjectNode,
   Keyframe,
+  PathCommand,
 } from "../types/document";
 
 interface EditingContext {
@@ -260,14 +261,15 @@ export function EditorPage() {
     return sceneId ? doc.scenes[sceneId] : null;
   }, [doc]);
 
-  // Reload engine when document changes (e.g. from drag moves)
+  // Reload engine when document changes (e.g. from drag moves, keyframe recording)
   const docVersionRef = useRef(0);
   useEffect(() => {
     if (!doc) return;
     docVersionRef.current++;
     // Skip first load — already loaded in the effect above
     if (docVersionRef.current <= 1) return;
-    stageRef.current.loadDocument(doc);
+    // Use updateDocument to preserve playback state (frame position, playing flag)
+    stageRef.current.updateDocument(doc);
   }, [doc]);
 
   useEffect(() => {
@@ -723,6 +725,114 @@ export function EditorPage() {
           tool === "rect"
             ? { width: defaultSize, height: defaultSize }
             : { rx: defaultSize / 2, ry: defaultSize / 2 },
+      };
+
+      commandDispatcher.dispatch({
+        type: "object.create",
+        object: newObject,
+        parentId: scene.root,
+      });
+
+      // Auto-select the new object and switch to select tool
+      setSelectedObjectId(objectId);
+      setActiveTool("select");
+    },
+    [doc, scene],
+  );
+
+  // --- Pen tool path creation ---
+
+  const handleCreatePath = useCallback(
+    (commands: PathCommand[]) => {
+      if (!doc || !scene || commands.length === 0) return;
+
+      // Calculate bounds of the path to determine position and anchor
+      let minX = Infinity,
+        minY = Infinity,
+        maxX = -Infinity,
+        maxY = -Infinity;
+
+      for (const cmd of commands) {
+        if (cmd[0] === "M" || cmd[0] === "L") {
+          minX = Math.min(minX, cmd[1]);
+          minY = Math.min(minY, cmd[2]);
+          maxX = Math.max(maxX, cmd[1]);
+          maxY = Math.max(maxY, cmd[2]);
+        } else if (cmd[0] === "C") {
+          // Include all bezier control points
+          minX = Math.min(minX, cmd[1], cmd[3], cmd[5]);
+          minY = Math.min(minY, cmd[2], cmd[4], cmd[6]);
+          maxX = Math.max(maxX, cmd[1], cmd[3], cmd[5]);
+          maxY = Math.max(maxY, cmd[2], cmd[4], cmd[6]);
+        } else if (cmd[0] === "Q") {
+          minX = Math.min(minX, cmd[1], cmd[3]);
+          minY = Math.min(minY, cmd[2], cmd[4]);
+          maxX = Math.max(maxX, cmd[1], cmd[3]);
+          maxY = Math.max(maxY, cmd[2], cmd[4]);
+        }
+      }
+
+      // Normalize path commands relative to minX, minY
+      const normalizedCommands: PathCommand[] = commands.map((cmd) => {
+        switch (cmd[0]) {
+          case "M":
+            return ["M", cmd[1] - minX, cmd[2] - minY];
+          case "L":
+            return ["L", cmd[1] - minX, cmd[2] - minY];
+          case "C":
+            return [
+              "C",
+              cmd[1] - minX,
+              cmd[2] - minY,
+              cmd[3] - minX,
+              cmd[4] - minY,
+              cmd[5] - minX,
+              cmd[6] - minY,
+            ];
+          case "Q":
+            return [
+              "Q",
+              cmd[1] - minX,
+              cmd[2] - minY,
+              cmd[3] - minX,
+              cmd[4] - minY,
+            ];
+          case "Z":
+            return ["Z"];
+          default:
+            return cmd;
+        }
+      });
+
+      const width = maxX - minX;
+      const height = maxY - minY;
+
+      const objectId = crypto.randomUUID();
+      const newObject: ObjectNode = {
+        id: objectId,
+        type: "VectorPath",
+        parent: scene.root,
+        children: [],
+        transform: {
+          x: minX,
+          y: minY,
+          sx: 1,
+          sy: 1,
+          r: 0,
+          ax: width / 2,
+          ay: height / 2,
+        },
+        style: {
+          fill: "none",
+          stroke: "#4a90d9",
+          strokeWidth: 2,
+          opacity: 1,
+        },
+        visible: true,
+        locked: false,
+        data: {
+          commands: normalizedCommands,
+        },
       };
 
       commandDispatcher.dispatch({
@@ -1291,6 +1401,7 @@ export function EditorPage() {
             onDragMove={handleDragMove}
             onDragEnd={handleDragEnd}
             onCreateObject={handleCreateObject}
+            onCreatePath={handleCreatePath}
           />
         </div>
 

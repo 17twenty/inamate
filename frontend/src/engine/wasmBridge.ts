@@ -18,6 +18,7 @@ declare global {
 interface InamateEngine {
   // Commands (frontend → backend)
   loadDocument(json: string): { ok?: boolean; error?: string };
+  updateDocument(json: string): { ok?: boolean; error?: string };
   loadSampleDocument(projectId?: string): { ok?: boolean };
   setPlayhead(frame: number): void;
   play(): void;
@@ -58,7 +59,7 @@ export async function initWasm(): Promise<void> {
     const go = new window.Go();
     const result = await WebAssembly.instantiateStreaming(
       fetch("/engine.wasm"),
-      go.importObject
+      go.importObject,
     );
 
     // Run the Go program (non-blocking, keeps running)
@@ -131,6 +132,13 @@ function getEngine(): InamateEngine {
 
 export function loadDocument(doc: InDocument): void {
   const result = getEngine().loadDocument(JSON.stringify(doc));
+  if (result.error) {
+    throw new Error(result.error);
+  }
+}
+
+export function updateDocument(doc: InDocument): void {
+  const result = getEngine().updateDocument(JSON.stringify(doc));
   if (result.error) {
     throw new Error(result.error);
   }

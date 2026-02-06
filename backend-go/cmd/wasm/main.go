@@ -18,6 +18,7 @@ func main() {
 
 	// --- Commands (frontend → backend) ---
 	inamateEngine.Set("loadDocument", js.FuncOf(loadDocument))
+	inamateEngine.Set("updateDocument", js.FuncOf(updateDocument))
 	inamateEngine.Set("loadSampleDocument", js.FuncOf(loadSampleDocument))
 	inamateEngine.Set("setPlayhead", js.FuncOf(setPlayhead))
 	inamateEngine.Set("play", js.FuncOf(play))
@@ -58,6 +59,19 @@ func loadDocument(this js.Value, args []js.Value) interface{} {
 
 	jsonData := args[0].String()
 	if err := eng.LoadDocument(jsonData); err != nil {
+		return js.ValueOf(map[string]interface{}{"error": err.Error()})
+	}
+
+	return js.ValueOf(map[string]interface{}{"ok": true})
+}
+
+func updateDocument(this js.Value, args []js.Value) interface{} {
+	if len(args) < 1 {
+		return js.ValueOf(map[string]interface{}{"error": "missing document JSON"})
+	}
+
+	jsonData := args[0].String()
+	if err := eng.UpdateDocument(jsonData); err != nil {
 		return js.ValueOf(map[string]interface{}{"error": err.Error()})
 	}
 

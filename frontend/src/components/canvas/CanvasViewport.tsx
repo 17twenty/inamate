@@ -8,9 +8,16 @@ import {
 import type { Stage } from "../../engine/Stage";
 import type { Tool } from "../editor/Toolbar";
 import type { Bounds, HandleType } from "../../engine/commands";
+import type { PathCommand } from "../../types/document";
 import { CursorOverlay } from "./CursorOverlay";
 
 export type DragType = "move" | HandleType;
+
+// Pen tool point - for now just position, later will include handles
+export interface PenPoint {
+  x: number;
+  y: number;
+}
 
 interface CanvasViewportProps {
   stage: Stage;
@@ -34,6 +41,8 @@ interface CanvasViewportProps {
   onDragMove?: (x: number, y: number) => void;
   onDragEnd?: () => void;
   onCreateObject?: (x: number, y: number, tool: Tool) => void;
+  // Pen tool
+  onCreatePath?: (commands: PathCommand[]) => void;
 }
 
 const MIN_ZOOM = 0.1;
@@ -56,8 +65,10 @@ export function CanvasViewport({
   onDragMove,
   onDragEnd,
   onCreateObject,
+  onCreatePath,
 }: CanvasViewportProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const penOverlayRef = useRef<HTMLCanvasElement>(null);
 
   // Viewport state: pan offset and zoom level
   const [pan, setPan] = useState({ x: 0, y: 0 });
@@ -68,6 +79,11 @@ export function CanvasViewport({
   const isDraggingRef = useRef(false);
   const dragTypeRef = useRef<DragType | null>(null);
   const panStartRef = useRef({ x: 0, y: 0, panX: 0, panY: 0 });
+
+  // Pen tool state
+  const [penPoints, setPenPoints] = useState<PenPoint[]>([]);
+  const [penPreviewPoint, setPenPreviewPoint] = useState<PenPoint | null>(null);
+  const isDrawingPath = penPoints.length > 0;
 
   // Attach canvas to Stage on mount
   useEffect(() => {
@@ -164,6 +180,84 @@ export function CanvasViewport({
     [containerRef, pan, zoom],
   );
 
+  // Convert pen points to path commands
+  const penPointsToCommands = useCallback(
+    (points: PenPoint[], closed: boolean): PathCommand[] => {
+      if (points.length === 0) return [];
+
+      const commands: PathCommand[] = [];
+      // Move to first point
+      commands.push(["M", points[0].x, points[0].y]);
+
+      // Line to each subsequent point
+      for (let i = 1; i < points.length; i++) {
+        commands.push(["L", points[i].x, points[i].y]);
+      }
+
+      // Close path if requested
+      if (closed && points.length >= 3) {
+        commands.push(["Z"]);
+      }
+
+      return commands;
+    },
+    [],
+  );
+
+  // Finish drawing the pen path
+  const finishPenPath = useCallback(
+    (closed: boolean) => {
+      if (penPoints.length < 2) {
+        // Need at least 2 points for a path
+        setPenPoints([]);
+        setPenPreviewPoint(null);
+        return;
+      }
+
+      const commands = penPointsToCommands(penPoints, closed);
+      if (onCreatePath && commands.length > 0) {
+        onCreatePath(commands);
+      }
+
+      // Reset pen state
+      setPenPoints([]);
+      setPenPreviewPoint(null);
+    },
+    [penPoints, penPointsToCommands, onCreatePath],
+  );
+
+  // Cancel pen drawing
+  const cancelPenPath = useCallback(() => {
+    setPenPoints([]);
+    setPenPreviewPoint(null);
+  }, []);
+
+  // Clear pen state when switching away from pen tool
+  useEffect(() => {
+    if (activeTool !== "pen" && penPoints.length > 0) {
+      // Finish the path as open when switching tools
+      finishPenPath(false);
+    }
+  }, [activeTool]); // intentionally not including finishPenPath/penPoints to avoid loops
+
+  // Keyboard shortcuts for pen tool
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (activeTool !== "pen" || !isDrawingPath) return;
+
+      if (e.key === "Escape") {
+        e.preventDefault();
+        cancelPenPath();
+      } else if (e.key === "Enter") {
+        e.preventDefault();
+        finishPenPath(false); // Finish as open path
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [activeTool, isDrawingPath, cancelPenPath, finishPenPath]);
+
   // Handle mouse down - either start panning or interact with canvas
   const handleMouseDown = useCallback(
     (e: React.MouseEvent) => {
@@ -182,12 +276,30 @@ export function CanvasViewport({
 
       const { x, y } = viewportToScene(e);
 
-      // Creation tools
+      // Creation tools (shapes)
       if (
         (activeTool === "rect" || activeTool === "ellipse") &&
         onCreateObject
       ) {
         onCreateObject(x, y, activeTool);
+        return;
+      }
+
+      // Pen tool
+      if (activeTool === "pen") {
+        // Check if clicking near the first point to close the path
+        if (penPoints.length >= 2) {
+          const firstPoint = penPoints[0];
+          const distance = Math.hypot(x - firstPoint.x, y - firstPoint.y);
+          if (distance < 10) {
+            // Close the path
+            finishPenPath(true);
+            return;
+          }
+        }
+
+        // Add a new point
+        setPenPoints((prev) => [...prev, { x, y }]);
         return;
       }
 
@@ -253,10 +365,15 @@ export function CanvasViewport({
         return;
       }
 
+      // Pen tool preview
+      if (activeTool === "pen" && isDrawingPath) {
+        setPenPreviewPoint({ x, y });
+      }
+
       // Regular mouse move (cursor tracking)
       onMouseMove?.(x, y);
     },
-    [viewportToScene, onDragMove, onMouseMove],
+    [viewportToScene, onDragMove, onMouseMove, activeTool, isDrawingPath],
   );
 
   // Handle mouse up
@@ -308,6 +425,7 @@ export function CanvasViewport({
     }
     if (activeTool === "hand" || spaceHeld) return "grab";
     if (activeTool === "rect" || activeTool === "ellipse") return "crosshair";
+    if (activeTool === "pen") return "crosshair";
     return "default";
   };
 
@@ -400,6 +518,57 @@ export function CanvasViewport({
             height: sceneHeight,
           }}
         />
+
+        {/* Pen tool drawing overlay */}
+        {isDrawingPath && (
+          <svg
+            className="absolute inset-0"
+            style={{
+              width: sceneWidth,
+              height: sceneHeight,
+            }}
+            viewBox={`0 0 ${sceneWidth} ${sceneHeight}`}
+          >
+            {/* Draw the path so far */}
+            {penPoints.length >= 2 && (
+              <polyline
+                points={penPoints.map((p) => `${p.x},${p.y}`).join(" ")}
+                fill="none"
+                stroke="#0066ff"
+                strokeWidth={2}
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              />
+            )}
+
+            {/* Preview line from last point to cursor */}
+            {penPoints.length >= 1 && penPreviewPoint && (
+              <line
+                x1={penPoints[penPoints.length - 1].x}
+                y1={penPoints[penPoints.length - 1].y}
+                x2={penPreviewPoint.x}
+                y2={penPreviewPoint.y}
+                stroke="#0066ff"
+                strokeWidth={2}
+                strokeDasharray="4 4"
+                strokeLinecap="round"
+              />
+            )}
+
+            {/* Draw points */}
+            {penPoints.map((point, i) => (
+              <circle
+                key={i}
+                cx={point.x}
+                cy={point.y}
+                r={i === 0 && penPoints.length >= 2 ? 6 : 4}
+                fill={i === 0 ? "#ff6600" : "#0066ff"}
+                stroke="#ffffff"
+                strokeWidth={1.5}
+              />
+            ))}
+          </svg>
+        )}
       </div>
 
       {/* Cursor overlay - needs to account for pan/zoom */}

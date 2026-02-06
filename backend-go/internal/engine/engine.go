@@ -75,6 +75,44 @@ func (e *Engine) LoadDocument(jsonData string) error {
 	return nil
 }
 
+// UpdateDocument reloads a document from JSON while preserving playback state.
+// Used when the document changes during editing/playback (e.g. keyframe recording).
+func (e *Engine) UpdateDocument(jsonData string) error {
+	var doc document.InDocument
+	if err := json.Unmarshal([]byte(jsonData), &doc); err != nil {
+		return err
+	}
+
+	e.doc = &doc
+	e.fps = doc.Project.FPS
+	if e.fps <= 0 {
+		e.fps = 24
+	}
+
+	if len(doc.Project.Scenes) > 0 {
+		e.sceneID = doc.Project.Scenes[0]
+	}
+
+	if tl, ok := doc.Timelines[doc.Project.RootTimeline]; ok {
+		e.totalFrames = tl.Length
+	} else {
+		e.totalFrames = 48
+	}
+
+	// Clamp frame to valid range (but don't reset it)
+	if e.frame >= e.totalFrames {
+		e.frame = e.totalFrames - 1
+	}
+	if e.frame < 0 {
+		e.frame = 0
+	}
+
+	// Preserve playing state and selection — don't reset them
+	e.dirty = true
+
+	return nil
+}
+
 // LoadSampleDocument loads the built-in sample document.
 func (e *Engine) LoadSampleDocument(projectID string) {
 	e.doc = document.NewSampleDocument(projectID)
