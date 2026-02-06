@@ -4,7 +4,14 @@
  * Operations capture previous state for undo/redo.
  */
 
-import type { Transform, Style, ObjectNode, Keyframe, Scene } from "./document";
+import type {
+  Transform,
+  Style,
+  ObjectNode,
+  Keyframe,
+  Scene,
+  Asset,
+} from "./document";
 
 // Base operation interface - all operations extend this
 export interface BaseOperation {
@@ -42,6 +49,7 @@ export interface CreateObjectOp extends BaseOperation {
   object: ObjectNode;
   parentId: string;
   index?: number; // Insert position in parent's children
+  asset?: Asset; // Bundled asset (for RasterImage creates)
 }
 
 export interface ReparentObjectOp extends BaseOperation {

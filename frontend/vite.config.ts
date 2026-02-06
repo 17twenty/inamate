@@ -8,6 +8,7 @@ export default defineConfig({
     proxy: {
       "/api": "http://localhost:8080",
       "/auth": "http://localhost:8080",
+      "/assets": "http://localhost:8080",
       "/ws": {
         target: "ws://localhost:8080",
         ws: true,

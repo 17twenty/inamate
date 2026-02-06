@@ -13,10 +13,12 @@ import { CursorOverlay } from "./CursorOverlay";
 
 export type DragType = "move" | HandleType;
 
-// Pen tool point - for now just position, later will include handles
+// Pen tool point with optional bezier handles (absolute coordinates)
 export interface PenPoint {
   x: number;
   y: number;
+  handleIn?: { x: number; y: number }; // control handle arriving at this point
+  handleOut?: { x: number; y: number }; // control handle leaving this point
 }
 
 interface CanvasViewportProps {
@@ -84,6 +86,15 @@ export function CanvasViewport({
   const [penPoints, setPenPoints] = useState<PenPoint[]>([]);
   const [penPreviewPoint, setPenPreviewPoint] = useState<PenPoint | null>(null);
   const isDrawingPath = penPoints.length > 0;
+
+  // Bezier handle drag state
+  const pendingPointRef = useRef<PenPoint | null>(null);
+  const penMouseDownRef = useRef(false);
+  const penDragStartRef = useRef<{ x: number; y: number } | null>(null);
+  const [handleDragPos, setHandleDragPos] = useState<{
+    x: number;
+    y: number;
+  } | null>(null);
 
   // Attach canvas to Stage on mount
   useEffect(() => {
@@ -180,22 +191,40 @@ export function CanvasViewport({
     [containerRef, pan, zoom],
   );
 
-  // Convert pen points to path commands
+  // Convert pen points to path commands (with bezier support)
   const penPointsToCommands = useCallback(
     (points: PenPoint[], closed: boolean): PathCommand[] => {
       if (points.length === 0) return [];
 
       const commands: PathCommand[] = [];
-      // Move to first point
       commands.push(["M", points[0].x, points[0].y]);
 
-      // Line to each subsequent point
       for (let i = 1; i < points.length; i++) {
-        commands.push(["L", points[i].x, points[i].y]);
+        const prev = points[i - 1];
+        const curr = points[i];
+
+        if (prev.handleOut || curr.handleIn) {
+          // Cubic bezier: cp1 = prev.handleOut, cp2 = curr.handleIn
+          const cp1x = prev.handleOut?.x ?? prev.x;
+          const cp1y = prev.handleOut?.y ?? prev.y;
+          const cp2x = curr.handleIn?.x ?? curr.x;
+          const cp2y = curr.handleIn?.y ?? curr.y;
+          commands.push(["C", cp1x, cp1y, cp2x, cp2y, curr.x, curr.y]);
+        } else {
+          commands.push(["L", curr.x, curr.y]);
+        }
       }
 
-      // Close path if requested
       if (closed && points.length >= 3) {
+        const last = points[points.length - 1];
+        const first = points[0];
+        if (last.handleOut || first.handleIn) {
+          const cp1x = last.handleOut?.x ?? last.x;
+          const cp1y = last.handleOut?.y ?? last.y;
+          const cp2x = first.handleIn?.x ?? first.x;
+          const cp2y = first.handleIn?.y ?? first.y;
+          commands.push(["C", cp1x, cp1y, cp2x, cp2y, first.x, first.y]);
+        }
         commands.push(["Z"]);
       }
 
@@ -230,6 +259,10 @@ export function CanvasViewport({
   const cancelPenPath = useCallback(() => {
     setPenPoints([]);
     setPenPreviewPoint(null);
+    pendingPointRef.current = null;
+    penMouseDownRef.current = false;
+    penDragStartRef.current = null;
+    setHandleDragPos(null);
   }, []);
 
   // Clear pen state when switching away from pen tool
@@ -292,14 +325,15 @@ export function CanvasViewport({
           const firstPoint = penPoints[0];
           const distance = Math.hypot(x - firstPoint.x, y - firstPoint.y);
           if (distance < 10) {
-            // Close the path
             finishPenPath(true);
             return;
           }
         }
 
-        // Add a new point
-        setPenPoints((prev) => [...prev, { x, y }]);
+        // Store as pending point — committed on mouseUp
+        pendingPointRef.current = { x, y };
+        penMouseDownRef.current = true;
+        penDragStartRef.current = { x, y };
         return;
       }
 
@@ -365,9 +399,25 @@ export function CanvasViewport({
         return;
       }
 
-      // Pen tool preview
-      if (activeTool === "pen" && isDrawingPath) {
-        setPenPreviewPoint({ x, y });
+      // Pen tool: handle drag or preview
+      if (activeTool === "pen") {
+        if (
+          penMouseDownRef.current &&
+          pendingPointRef.current &&
+          penDragStartRef.current
+        ) {
+          // Dragging to define bezier handles
+          const anchor = penDragStartRef.current;
+          pendingPointRef.current = {
+            x: anchor.x,
+            y: anchor.y,
+            handleOut: { x, y },
+            handleIn: { x: 2 * anchor.x - x, y: 2 * anchor.y - y },
+          };
+          setHandleDragPos({ x, y });
+        } else if (isDrawingPath) {
+          setPenPreviewPoint({ x, y });
+        }
       }
 
       // Regular mouse move (cursor tracking)
@@ -377,16 +427,45 @@ export function CanvasViewport({
   );
 
   // Handle mouse up
-  const handleMouseUp = useCallback(() => {
-    if (isPanningRef.current) {
-      isPanningRef.current = false;
-    }
-    if (isDraggingRef.current) {
-      isDraggingRef.current = false;
-      dragTypeRef.current = null;
-      onDragEnd?.();
-    }
-  }, [onDragEnd]);
+  const handleMouseUp = useCallback(
+    (e: React.MouseEvent) => {
+      if (isPanningRef.current) {
+        isPanningRef.current = false;
+      }
+      if (isDraggingRef.current) {
+        isDraggingRef.current = false;
+        dragTypeRef.current = null;
+        onDragEnd?.();
+      }
+
+      // Pen tool: commit pending point
+      if (penMouseDownRef.current && pendingPointRef.current) {
+        const pending = pendingPointRef.current;
+        const dragStart = penDragStartRef.current;
+
+        // If drag distance < 3px, it's a sharp corner (no handles)
+        if (dragStart) {
+          const { x, y } = viewportToScene(e);
+          const dist = Math.hypot(x - dragStart.x, y - dragStart.y);
+          if (dist < 3) {
+            // Sharp corner — strip handles
+            setPenPoints((prev) => [...prev, { x: pending.x, y: pending.y }]);
+          } else {
+            // Smooth point — keep handles
+            setPenPoints((prev) => [...prev, pending]);
+          }
+        } else {
+          setPenPoints((prev) => [...prev, { x: pending.x, y: pending.y }]);
+        }
+
+        pendingPointRef.current = null;
+        penMouseDownRef.current = false;
+        penDragStartRef.current = null;
+        setHandleDragPos(null);
+      }
+    },
+    [onDragEnd, viewportToScene],
+  );
 
   // Handle mouse leave
   const handleMouseLeave = useCallback(() => {
@@ -412,6 +491,37 @@ export function CanvasViewport({
     },
     [viewportToScene, stage, onDoubleClick],
   );
+
+  // Build SVG path `d` attribute from committed pen points (with bezier support)
+  const buildSvgPathD = (points: PenPoint[]): string => {
+    if (points.length === 0) return "";
+    let d = `M ${points[0].x} ${points[0].y}`;
+    for (let i = 1; i < points.length; i++) {
+      const prev = points[i - 1];
+      const curr = points[i];
+      if (prev.handleOut || curr.handleIn) {
+        const cp1x = prev.handleOut?.x ?? prev.x;
+        const cp1y = prev.handleOut?.y ?? prev.y;
+        const cp2x = curr.handleIn?.x ?? curr.x;
+        const cp2y = curr.handleIn?.y ?? curr.y;
+        d += ` C ${cp1x} ${cp1y} ${cp2x} ${cp2y} ${curr.x} ${curr.y}`;
+      } else {
+        d += ` L ${curr.x} ${curr.y}`;
+      }
+    }
+    return d;
+  };
+
+  // Build a preview segment from the last point to the cursor
+  const buildPreviewSegmentD = (from: PenPoint, to: PenPoint): string => {
+    if (from.handleOut) {
+      // Last committed point has a handleOut — draw a curve to the preview point
+      const cp1x = from.handleOut.x;
+      const cp1y = from.handleOut.y;
+      return `M ${from.x} ${from.y} C ${cp1x} ${cp1y} ${to.x} ${to.y} ${to.x} ${to.y}`;
+    }
+    return `M ${from.x} ${from.y} L ${to.x} ${to.y}`;
+  };
 
   // Determine cursor
   const getCursor = () => {
@@ -520,7 +630,7 @@ export function CanvasViewport({
         />
 
         {/* Pen tool drawing overlay */}
-        {isDrawingPath && (
+        {(isDrawingPath || penMouseDownRef.current) && (
           <svg
             className="absolute inset-0"
             style={{
@@ -529,10 +639,10 @@ export function CanvasViewport({
             }}
             viewBox={`0 0 ${sceneWidth} ${sceneHeight}`}
           >
-            {/* Draw the path so far */}
+            {/* Draw the committed path as bezier curves */}
             {penPoints.length >= 2 && (
-              <polyline
-                points={penPoints.map((p) => `${p.x},${p.y}`).join(" ")}
+              <path
+                d={buildSvgPathD(penPoints)}
                 fill="none"
                 stroke="#0066ff"
                 strokeWidth={2}
@@ -541,13 +651,14 @@ export function CanvasViewport({
               />
             )}
 
-            {/* Preview line from last point to cursor */}
-            {penPoints.length >= 1 && penPreviewPoint && (
-              <line
-                x1={penPoints[penPoints.length - 1].x}
-                y1={penPoints[penPoints.length - 1].y}
-                x2={penPreviewPoint.x}
-                y2={penPreviewPoint.y}
+            {/* Preview segment from last committed point to cursor */}
+            {penPoints.length >= 1 && penPreviewPoint && !handleDragPos && (
+              <path
+                d={buildPreviewSegmentD(
+                  penPoints[penPoints.length - 1],
+                  penPreviewPoint,
+                )}
+                fill="none"
                 stroke="#0066ff"
                 strokeWidth={2}
                 strokeDasharray="4 4"
@@ -555,7 +666,107 @@ export function CanvasViewport({
               />
             )}
 
-            {/* Draw points */}
+            {/* Handle arms for committed points */}
+            {penPoints.map((point, i) => (
+              <g key={`handles-${i}`}>
+                {point.handleOut && (
+                  <>
+                    <line
+                      x1={point.x}
+                      y1={point.y}
+                      x2={point.handleOut.x}
+                      y2={point.handleOut.y}
+                      stroke="#ff6600"
+                      strokeWidth={1}
+                    />
+                    <circle
+                      cx={point.handleOut.x}
+                      cy={point.handleOut.y}
+                      r={3}
+                      fill="#ff6600"
+                      stroke="#fff"
+                      strokeWidth={1}
+                    />
+                  </>
+                )}
+                {point.handleIn && (
+                  <>
+                    <line
+                      x1={point.x}
+                      y1={point.y}
+                      x2={point.handleIn.x}
+                      y2={point.handleIn.y}
+                      stroke="#ff6600"
+                      strokeWidth={1}
+                    />
+                    <circle
+                      cx={point.handleIn.x}
+                      cy={point.handleIn.y}
+                      r={3}
+                      fill="#ff6600"
+                      stroke="#fff"
+                      strokeWidth={1}
+                    />
+                  </>
+                )}
+              </g>
+            ))}
+
+            {/* Active drag handle arms (pending point) */}
+            {handleDragPos && pendingPointRef.current && (
+              <g>
+                {pendingPointRef.current.handleIn && (
+                  <>
+                    <line
+                      x1={pendingPointRef.current.x}
+                      y1={pendingPointRef.current.y}
+                      x2={pendingPointRef.current.handleIn.x}
+                      y2={pendingPointRef.current.handleIn.y}
+                      stroke="#ff6600"
+                      strokeWidth={1}
+                    />
+                    <circle
+                      cx={pendingPointRef.current.handleIn.x}
+                      cy={pendingPointRef.current.handleIn.y}
+                      r={3}
+                      fill="#ff6600"
+                      stroke="#fff"
+                      strokeWidth={1}
+                    />
+                  </>
+                )}
+                {pendingPointRef.current.handleOut && (
+                  <>
+                    <line
+                      x1={pendingPointRef.current.x}
+                      y1={pendingPointRef.current.y}
+                      x2={pendingPointRef.current.handleOut.x}
+                      y2={pendingPointRef.current.handleOut.y}
+                      stroke="#ff6600"
+                      strokeWidth={1}
+                    />
+                    <circle
+                      cx={pendingPointRef.current.handleOut.x}
+                      cy={pendingPointRef.current.handleOut.y}
+                      r={3}
+                      fill="#ff6600"
+                      stroke="#fff"
+                      strokeWidth={1}
+                    />
+                  </>
+                )}
+                <circle
+                  cx={pendingPointRef.current.x}
+                  cy={pendingPointRef.current.y}
+                  r={4}
+                  fill="#0066ff"
+                  stroke="#ffffff"
+                  strokeWidth={1.5}
+                />
+              </g>
+            )}
+
+            {/* Anchor point circles for committed points */}
             {penPoints.map((point, i) => (
               <circle
                 key={i}

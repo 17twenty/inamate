@@ -1,4 +1,4 @@
-import type { PathCommand } from "../types/document";
+import type { PathCommand, Asset } from "../types/document";
 
 /**
  * DrawCommand represents a single drawing operation from the WASM engine.
@@ -13,7 +13,36 @@ export interface DrawCommand {
   stroke?: string;
   strokeWidth?: number;
   opacity?: number;
+  imageAssetId?: string;
+  imageWidth?: number;
+  imageHeight?: number;
 }
+
+// Module-level image cache: URL -> HTMLImageElement
+const imageCache = new Map<string, HTMLImageElement>();
+
+// Callback when any image finishes loading (so caller can trigger re-render)
+let onImageLoaded: (() => void) | null = null;
+
+export function setImageLoadedCallback(cb: (() => void) | null): void {
+  onImageLoaded = cb;
+}
+
+function getCachedImage(url: string): HTMLImageElement | null {
+  const existing = imageCache.get(url);
+  if (existing) return existing.complete ? existing : null;
+
+  const img = new Image();
+  img.onload = () => {
+    onImageLoaded?.();
+  };
+  img.src = url;
+  imageCache.set(url, img);
+  return null; // Will be available after load
+}
+
+// Asset lookup — set by the caller before executing commands
+let currentAssets: Record<string, Asset> = {};
 
 /**
  * Bounding box for an object.
@@ -48,7 +77,11 @@ export function executeCommands(
   commands: DrawCommand[],
   background?: string,
   dpr: number = 1,
+  assets?: Record<string, Asset>,
 ): void {
+  if (assets) {
+    currentAssets = assets;
+  }
   // Clear canvas at full resolution
   ctx.save();
   ctx.setTransform(1, 0, 0, 1, 0, 0);
@@ -87,7 +120,7 @@ export function executeCommands(
         break;
 
       case "image":
-        // TODO: Implement image drawing
+        drawImage(ctx, cmd);
         break;
     }
   }
@@ -126,6 +159,34 @@ function drawPath(ctx: CanvasRenderingContext2D, cmd: DrawCommand): void {
     ctx.lineWidth = cmd.strokeWidth;
     ctx.stroke(path);
   }
+
+  ctx.restore();
+}
+
+/**
+ * Draw an image command.
+ */
+function drawImage(ctx: CanvasRenderingContext2D, cmd: DrawCommand): void {
+  if (!cmd.imageAssetId || !cmd.imageWidth || !cmd.imageHeight) return;
+
+  // Look up the asset URL from the current document's assets
+  const asset = currentAssets[cmd.imageAssetId];
+  if (!asset) return;
+
+  const img = getCachedImage(asset.url);
+  if (!img) return; // Not loaded yet — will appear on next frame
+
+  ctx.save();
+
+  if (cmd.transform) {
+    applyTransform(ctx, cmd.transform);
+  }
+
+  if (cmd.opacity !== undefined) {
+    ctx.globalAlpha = cmd.opacity;
+  }
+
+  ctx.drawImage(img, 0, 0, cmd.imageWidth, cmd.imageHeight);
 
   ctx.restore();
 }
@@ -245,9 +306,27 @@ export function transformPoint(
  * Get the bounding box of a command in world coordinates (after transform).
  */
 export function getWorldBounds(cmd: DrawCommand): Bounds | null {
-  if (!cmd.path || cmd.path.length === 0 || !cmd.transform) return null;
+  if (!cmd.transform) return null;
 
-  const localBounds = getBoundsFromPath(cmd.path);
+  let localBounds: Bounds;
+
+  if (
+    cmd.op === "image" &&
+    cmd.imageAssetId &&
+    cmd.imageWidth &&
+    cmd.imageHeight
+  ) {
+    localBounds = {
+      minX: 0,
+      minY: 0,
+      maxX: cmd.imageWidth,
+      maxY: cmd.imageHeight,
+    };
+  } else if (cmd.path && cmd.path.length > 0) {
+    localBounds = getBoundsFromPath(cmd.path);
+  } else {
+    return null;
+  }
 
   // Transform all 4 corners and find the axis-aligned bounding box
   const corners = [
@@ -279,7 +358,12 @@ export function renderSelectionOutline(
   ctx: CanvasRenderingContext2D,
   cmd: DrawCommand,
 ): void {
-  if (!cmd.path || cmd.path.length === 0 || !cmd.transform) return;
+  if (!cmd.transform) return;
+
+  const isImage =
+    cmd.op === "image" && cmd.imageAssetId && cmd.imageWidth && cmd.imageHeight;
+  const hasPath = cmd.path && cmd.path.length > 0;
+  if (!isImage && !hasPath) return;
 
   // Get world bounds for handles
   const worldBounds = getWorldBounds(cmd);
@@ -288,11 +372,18 @@ export function renderSelectionOutline(
   // Draw dashed outline in local space (follows rotation)
   ctx.save();
   applyTransform(ctx, cmd.transform);
-  const path = buildPath(cmd.path);
-  ctx.strokeStyle = "#0066ff";
-  ctx.lineWidth = 2;
-  ctx.setLineDash([5, 5]);
-  ctx.stroke(path);
+  if (isImage) {
+    ctx.strokeStyle = "#0066ff";
+    ctx.lineWidth = 2;
+    ctx.setLineDash([5, 5]);
+    ctx.strokeRect(0, 0, cmd.imageWidth!, cmd.imageHeight!);
+  } else {
+    const path = buildPath(cmd.path!);
+    ctx.strokeStyle = "#0066ff";
+    ctx.lineWidth = 2;
+    ctx.setLineDash([5, 5]);
+    ctx.stroke(path);
+  }
   ctx.restore();
 
   // Draw handles in world space (axis-aligned)
@@ -360,7 +451,11 @@ export function hitTestHandle(
   y: number,
   cmd: DrawCommand,
 ): HandleType {
-  if (!cmd.path || cmd.path.length === 0 || !cmd.transform) return null;
+  if (!cmd.transform) return null;
+  const isImage =
+    cmd.op === "image" && cmd.imageAssetId && cmd.imageWidth && cmd.imageHeight;
+  const hasPath = cmd.path && cmd.path.length > 0;
+  if (!isImage && !hasPath) return null;
 
   const worldBounds = getWorldBounds(cmd);
   if (!worldBounds) return null;

@@ -121,6 +121,40 @@ func buildNode(
 		node.Path = extractVectorPath(obj.Data)
 		node.Bounds = computePathBounds(node.Path, worldMatrix)
 
+	case document.ObjectTypeRasterImage:
+		node.Type = "image"
+		var imgData struct {
+			AssetID string  `json:"assetId"`
+			Width   float64 `json:"width"`
+			Height  float64 `json:"height"`
+		}
+		if err := json.Unmarshal(obj.Data, &imgData); err == nil {
+			node.ImageAssetID = imgData.AssetID
+			node.ImageWidth = imgData.Width
+			node.ImageHeight = imgData.Height
+			// Compute bounds from image dimensions
+			corners := [][2]float64{
+				{0, 0},
+				{imgData.Width, 0},
+				{imgData.Width, imgData.Height},
+				{0, imgData.Height},
+			}
+			var bMinX, bMinY, bMaxX, bMaxY float64
+			for i, c := range corners {
+				wx, wy := worldMatrix.TransformPoint(c[0], c[1])
+				if i == 0 {
+					bMinX, bMaxX = wx, wx
+					bMinY, bMaxY = wy, wy
+				} else {
+					bMinX = math.Min(bMinX, wx)
+					bMaxX = math.Max(bMaxX, wx)
+					bMinY = math.Min(bMinY, wy)
+					bMaxY = math.Max(bMaxY, wy)
+				}
+			}
+			node.Bounds = Rect{X: bMinX, Y: bMinY, Width: bMaxX - bMinX, Height: bMaxY - bMinY}
+		}
+
 	case document.ObjectTypeSymbol:
 		// Symbol timeline already evaluated above before applying overrides
 	}

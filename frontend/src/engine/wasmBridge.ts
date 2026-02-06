@@ -131,15 +131,30 @@ function getEngine(): InamateEngine {
 
 // --- Commands ---
 
+/**
+ * Strip large asset URLs before sending to WASM.
+ * WASM only needs asset IDs (not the base64 data URIs) for draw commands.
+ */
+function stripAssetUrls(doc: InDocument): InDocument {
+  if (!doc.assets || Object.keys(doc.assets).length === 0) return doc;
+  const strippedAssets: Record<string, (typeof doc.assets)[string]> = {};
+  for (const [id, asset] of Object.entries(doc.assets)) {
+    strippedAssets[id] = { ...asset, url: "" };
+  }
+  return { ...doc, assets: strippedAssets };
+}
+
 export function loadDocument(doc: InDocument): void {
-  const result = getEngine().loadDocument(JSON.stringify(doc));
+  const result = getEngine().loadDocument(JSON.stringify(stripAssetUrls(doc)));
   if (result.error) {
     throw new Error(result.error);
   }
 }
 
 export function updateDocument(doc: InDocument): void {
-  const result = getEngine().updateDocument(JSON.stringify(doc));
+  const result = getEngine().updateDocument(
+    JSON.stringify(stripAssetUrls(doc)),
+  );
   if (result.error) {
     throw new Error(result.error);
   }

@@ -1,18 +1,23 @@
 package engine
 
-import "encoding/json"
+import (
+	"encoding/json"
+)
 
 // DrawCommand represents a single drawing operation for the frontend to execute.
 // The frontend receives a list of these and executes them on a Canvas2D context.
 type DrawCommand struct {
-	Op          string        `json:"op"`                    // Operation: "path", "image", "save", "restore", "clip"
-	ObjectID    string        `json:"objectId,omitempty"`    // For hit correlation
-	Transform   []float64     `json:"transform,omitempty"`   // [a, b, c, d, e, f] affine matrix
-	Path        []PathCommand `json:"path,omitempty"`        // Path data for "path" ops
-	Fill        string        `json:"fill,omitempty"`        // Fill color
-	Stroke      string        `json:"stroke,omitempty"`      // Stroke color
-	StrokeWidth float64       `json:"strokeWidth,omitempty"` // Stroke width
-	Opacity     float64       `json:"opacity,omitempty"`     // Global alpha
+	Op           string        `json:"op"`                     // Operation: "path", "image", "save", "restore", "clip"
+	ObjectID     string        `json:"objectId,omitempty"`     // For hit correlation
+	Transform    []float64     `json:"transform,omitempty"`    // [a, b, c, d, e, f] affine matrix
+	Path         []PathCommand `json:"path,omitempty"`         // Path data for "path" ops
+	Fill         string        `json:"fill,omitempty"`         // Fill color
+	Stroke       string        `json:"stroke,omitempty"`       // Stroke color
+	StrokeWidth  float64       `json:"strokeWidth,omitempty"`  // Stroke width
+	Opacity      float64       `json:"opacity,omitempty"`      // Global alpha
+	ImageAssetID string        `json:"imageAssetId,omitempty"` // Asset ID for image lookup
+	ImageWidth   float64       `json:"imageWidth,omitempty"`   // Image natural width
+	ImageHeight  float64       `json:"imageHeight,omitempty"`  // Image natural height
 }
 
 // CompileDrawCommands generates a draw command buffer from a scene graph.
@@ -47,8 +52,19 @@ func compileNode(node *SceneNode, commands *[]DrawCommand) {
 		}
 	}
 
-	// If this node has renderable content (path data), emit a draw command
-	if len(node.Path) > 0 {
+	// If this node has renderable content, emit a draw command
+	if node.Type == "image" && node.ImageAssetID != "" {
+		cmd := DrawCommand{
+			Op:           "image",
+			ObjectID:     node.ID,
+			Transform:    node.WorldTransform.ToSlice(),
+			Opacity:      node.Opacity,
+			ImageAssetID: node.ImageAssetID,
+			ImageWidth:   node.ImageWidth,
+			ImageHeight:  node.ImageHeight,
+		}
+		*commands = append(*commands, cmd)
+	} else if len(node.Path) > 0 {
 		cmd := DrawCommand{
 			Op:          "path",
 			ObjectID:    node.ID,
@@ -114,11 +130,9 @@ func hitTestNode(node *SceneNode, x, y float64) string {
 		}
 	}
 
-	// Test this node if it has bounds and a renderable path
-	if len(node.Path) > 0 && !node.Bounds.IsEmpty() {
+	// Test this node if it has bounds and renderable content (path or image)
+	if (len(node.Path) > 0 || node.Type == "image") && !node.Bounds.IsEmpty() {
 		if node.Bounds.Contains(x, y) {
-			// For more accurate hit testing, we could test against the actual path
-			// For now, bounding box is sufficient
 			return node.ID
 		}
 	}

@@ -33,6 +33,7 @@ import type {
   ObjectNode,
   Keyframe,
   PathCommand,
+  Asset,
 } from "../types/document";
 
 interface EditingContext {
@@ -471,44 +472,53 @@ export function EditorPage() {
             newTransform.sy = drag.origSy * scaleFactor;
           }
         } else {
-          // No shift: scale from opposite corner (anchor)
-          // The anchor corner stays fixed while the dragged corner follows the mouse
+          // No shift: scale from opposite corner
+          // Use ratio of distances from the fixed corner to compute scale,
+          // then adjust position so the fixed corner stays visually pinned.
 
-          // Determine which corner is being dragged and which is the anchor
           const isDraggingLeft =
             drag.dragType === "scale-nw" || drag.dragType === "scale-sw";
           const isDraggingTop =
             drag.dragType === "scale-nw" || drag.dragType === "scale-ne";
 
-          // Anchor is the opposite corner
-          const anchorX = isDraggingLeft ? maxX : minX;
-          const anchorY = isDraggingTop ? maxY : minY;
+          // Fixed corner (opposite to the one being dragged)
+          const fixedX = isDraggingLeft ? maxX : minX;
+          const fixedY = isDraggingTop ? maxY : minY;
 
-          // Calculate new width/height based on mouse distance from anchor
-          // For left-side handles, width grows as mouse moves left (negative x direction)
-          // For top-side handles, height grows as mouse moves up (negative y direction)
-          const newWidth = isDraggingLeft ? anchorX - x : x - anchorX;
-          const newHeight = isDraggingTop ? anchorY - y : y - anchorY;
+          // Original distance from fixed corner to drag start
+          const origDistX = drag.startX - fixedX;
+          const origDistY = drag.startY - fixedY;
 
-          // Calculate scale factors (prevent negative/zero scale)
-          const scaleX = Math.max(0.01, newWidth / drag.origWidth);
-          const scaleY = Math.max(0.01, newHeight / drag.origHeight);
+          // Current distance from fixed corner to mouse
+          const curDistX = x - fixedX;
+          const curDistY = y - fixedY;
 
-          newTransform.sx = drag.origSx * scaleX;
-          newTransform.sy = drag.origSy * scaleY;
+          // Scale ratios (avoid division by zero)
+          const ratioX = Math.abs(origDistX) > 1 ? curDistX / origDistX : 1;
+          const ratioY = Math.abs(origDistY) > 1 ? curDistY / origDistY : 1;
 
-          // Adjust position to keep the anchor corner fixed
-          // When scaling from left, the left edge moves, so x position changes
-          // When scaling from top, the top edge moves, so y position changes
-          if (isDraggingLeft) {
-            // New left edge should be at mouse x position
-            // Object x is the left edge, so set it to where the mouse is
-            newTransform.x = x;
-          }
-          if (isDraggingTop) {
-            // New top edge should be at mouse y position
-            newTransform.y = y;
-          }
+          const newSx = drag.origSx * Math.max(0.01, ratioX);
+          const newSy = drag.origSy * Math.max(0.01, ratioY);
+
+          newTransform.sx = newSx;
+          newTransform.sy = newSy;
+
+          // Adjust position so the fixed corner stays pinned.
+          // The fixed corner's world position is determined by:
+          //   fixedWorld = objPos + (localCorner - anchor) * scale
+          // We want fixedWorld to remain at (fixedX, fixedY) after scale change.
+          // localCorner for the fixed corner:
+          //   fixedLocalX = isDraggingLeft ? origWidth/origSx : 0  (in unscaled local coords)
+          //   But simpler: fixedX = origX + (fixedLocalX - ax) * origSx
+          //   So fixedLocalX - ax = (fixedX - origX) / origSx
+          // After scale: fixedX_new = newX + (fixedLocalX - ax) * newSx
+          // Set fixedX_new = fixedX:
+          //   newX = fixedX - (fixedLocalX - ax) * newSx
+          //        = fixedX - ((fixedX - origX) / origSx) * newSx
+          const offsetX = (fixedX - drag.origX) / drag.origSx;
+          const offsetY = (fixedY - drag.origY) / drag.origSy;
+          newTransform.x = fixedX - offsetX * newSx;
+          newTransform.y = fixedY - offsetY * newSy;
         }
       }
     }
@@ -954,6 +964,145 @@ export function EditorPage() {
     },
     [doc, scene],
   );
+
+  // --- Image paste/drop ---
+
+  const uploadAndCreateImage = useCallback(
+    async (blob: Blob) => {
+      if (!doc || !scene) return;
+
+      // Upload to server
+      const formData = new FormData();
+      formData.append("file", blob);
+
+      let resp: Response;
+      try {
+        resp = await fetch("/assets/upload", {
+          method: "POST",
+          body: formData,
+        });
+      } catch {
+        console.error("Asset upload failed: network error");
+        return;
+      }
+      if (!resp.ok) {
+        console.error("Asset upload failed:", resp.status, await resp.text());
+        return;
+      }
+
+      const result = (await resp.json()) as {
+        id: string;
+        url: string;
+        width: number;
+        height: number;
+        type: string;
+        name: string;
+      };
+
+      const objectId = crypto.randomUUID();
+
+      const asset: Asset = {
+        id: result.id,
+        type: result.type as Asset["type"],
+        name: result.name,
+        url: result.url,
+        meta: {},
+      };
+
+      const w = result.width;
+      const h = result.height;
+
+      const newObject: ObjectNode = {
+        id: objectId,
+        type: "RasterImage",
+        parent: scene.root,
+        children: [],
+        transform: {
+          x: (scene.width - w) / 2,
+          y: (scene.height - h) / 2,
+          sx: 1,
+          sy: 1,
+          r: 0,
+          ax: w / 2,
+          ay: h / 2,
+        },
+        style: {
+          fill: "",
+          stroke: "",
+          strokeWidth: 0,
+          opacity: 1,
+        },
+        visible: true,
+        locked: false,
+        data: { assetId: result.id, width: w, height: h },
+      };
+
+      commandDispatcher.dispatch({
+        type: "object.create",
+        object: newObject,
+        parentId: scene.root,
+        asset,
+      });
+
+      setSelectedObjectId(objectId);
+      setActiveTool("select");
+    },
+    [doc, scene],
+  );
+
+  // Paste handler (Cmd+V with image on clipboard)
+  useEffect(() => {
+    const handlePaste = (e: ClipboardEvent) => {
+      if (!doc || !scene) return;
+      const items = e.clipboardData?.items;
+      if (!items) return;
+
+      for (const item of items) {
+        if (item.type.startsWith("image/")) {
+          e.preventDefault();
+          const blob = item.getAsFile();
+          if (!blob) continue;
+          uploadAndCreateImage(blob);
+          return;
+        }
+      }
+    };
+
+    window.addEventListener("paste", handlePaste);
+    return () => window.removeEventListener("paste", handlePaste);
+  }, [doc, scene, uploadAndCreateImage]);
+
+  // Drag-and-drop handler for image files
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
+
+    const handleDragOver = (e: DragEvent) => {
+      e.preventDefault();
+      if (e.dataTransfer) e.dataTransfer.dropEffect = "copy";
+    };
+
+    const handleDrop = (e: DragEvent) => {
+      e.preventDefault();
+      if (!doc || !scene) return;
+      const files = e.dataTransfer?.files;
+      if (!files) return;
+
+      for (const file of files) {
+        if (file.type.startsWith("image/")) {
+          uploadAndCreateImage(file);
+          return; // One image at a time
+        }
+      }
+    };
+
+    container.addEventListener("dragover", handleDragOver);
+    container.addEventListener("drop", handleDrop);
+    return () => {
+      container.removeEventListener("dragover", handleDragOver);
+      container.removeEventListener("drop", handleDrop);
+    };
+  }, [doc, scene, uploadAndCreateImage]);
 
   // --- Keyframe handlers ---
 

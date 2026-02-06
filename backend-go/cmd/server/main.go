@@ -15,6 +15,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/gorilla/mux"
 
+	"github.com/inamate/inamate/backend-go/internal/asset"
 	"github.com/inamate/inamate/backend-go/internal/auth"
 	"github.com/inamate/inamate/backend-go/internal/collab"
 	"github.com/inamate/inamate/backend-go/internal/config"
@@ -96,6 +97,8 @@ func main() {
 	hub := collab.NewHub(docLoader, docSaver)
 	go hub.Run()
 
+	assetHandler := asset.NewHandler(cfg.AssetDir)
+
 	r := mux.NewRouter()
 
 	// Global middleware
@@ -112,6 +115,10 @@ func main() {
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte(`{"status":"ok"}`))
 	}).Methods("GET")
+
+	// Asset endpoints (public — used by playground and authenticated users)
+	r.HandleFunc("/assets/upload", assetHandler.Upload).Methods("POST", "OPTIONS")
+	r.PathPrefix("/assets/").Handler(assetHandler.Serve()).Methods("GET")
 
 	// Protected API routes
 	api := r.PathPrefix("/api").Subrouter()

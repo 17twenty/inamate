@@ -77,6 +77,7 @@ type Operation struct {
 	Object   json.RawMessage `json:"object,omitempty"`
 	ParentID string          `json:"parentId,omitempty"`
 	Index    *int            `json:"index,omitempty"`
+	Asset    json.RawMessage `json:"asset,omitempty"` // Optional bundled asset (for RasterImage creates)
 
 	// For object.delete
 	PreviousObject         json.RawMessage `json:"previousObject,omitempty"`

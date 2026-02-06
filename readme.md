@@ -27,6 +27,68 @@ Built with a Go backend, a Go-based WebAssembly (WASM) core engine, and a TypeSc
 
 ---
 
+## Architecture
+
+### Rendering Pipeline
+
+Inamate uses a **command buffer** architecture for rendering, where the Go WASM engine owns the retained scene graph and makes all rendering decisions:
+
+```
+Go WASM Engine                          Frontend (Browser)
+┌─────────────────────┐                 ┌─────────────────────┐
+│ Document + Timeline  │                 │                     │
+│         ↓            │                 │                     │
+│ Build Scene Graph    │                 │                     │
+│  (transforms,        │   DrawCommand[] │                     │
+│   opacity,           │ ──────────────→ │ Execute on Canvas2D │
+│   visibility,        │   (JSON buffer) │  ctx.fill(path)     │
+│   path generation)   │                 │  ctx.stroke(path)   │
+│         ↓            │                 │  ctx.drawImage(img) │
+│ Compile DrawCommands │                 │  ctx.transform(...) │
+└─────────────────────┘                 └─────────────────────┘
+```
+
+The engine compiles the scene into a `DrawCommand[]` buffer containing path operations, transforms, fills, and strokes. The frontend receives this buffer and executes it on a Canvas2D context. This is analogous to a GPU command queue: the engine is the "driver" deciding *what* to draw; the browser's Canvas2D (which is GPU-accelerated) handles rasterization.
+
+**Why not full pixel rendering in WASM (Figma-style)?**
+
+Figma uses a custom C++ renderer compiled to WASM with years of optimization. For a Go WASM engine, the command buffer approach is superior because:
+
+1. **Canvas2D is GPU-accelerated** — the browser already uses hardware rendering for path fills, strokes, and image blits. Software rasterization in Go would be CPU-only and significantly slower.
+2. **No Go WASM rasterizer** — Go's ecosystem lacks a battle-tested pure-Go vector rasterizer that compiles to WASM (popular libraries like `fogleman/gg` depend on C/cairo).
+3. **Lower overhead** — emitting a command buffer is O(nodes); software rasterization would be O(pixels) for every frame.
+4. **Browser optimizations** — we benefit from antialiasing, sub-pixel rendering, and compositing that browsers have spent years optimizing.
+
+### Project Structure
+
+```
+frontend/           React/TypeScript UI, Canvas2D command executor
+  src/engine/       WASM bridge, Stage render loop, draw command interpreter
+  src/components/   React components (canvas, timeline, properties)
+  src/types/        Document model, operation types
+
+backend-go/         Go backend
+  cmd/wasm/         WASM entry point (JS bindings)
+  cmd/server/       HTTP/WebSocket server
+  internal/engine/  Scene graph, draw command compilation, animation evaluation
+  internal/collab/  Real-time collaboration, operation handling
+  internal/document/ Document model
+```
+
+### Operation System
+
+All document mutations flow through an operation-based system that supports undo/redo and real-time collaboration:
+
+```
+User Action → commandDispatcher.dispatch(operation)
+  → Optimistic local apply (immediate UI update)
+  → Send to server via WebSocket
+  → Server validates and broadcasts to other clients
+  → Undo: commandDispatcher.undo() inverts and applies
+```
+
+---
+
 ## Roadmap
 
 This project is developed in phases, with each phase building on the last.

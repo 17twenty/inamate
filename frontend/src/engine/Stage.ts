@@ -1,10 +1,11 @@
-import type { InDocument, Scene } from "../types/document";
+import type { InDocument, Scene, Asset } from "../types/document";
 import type { DrawCommand, HandleType, Bounds } from "./commands";
 import {
   executeCommands,
   renderSelectionOutline,
   hitTestHandle,
   getWorldBounds,
+  setImageLoadedCallback,
 } from "./commands";
 import * as wasm from "./wasmBridge";
 
@@ -37,6 +38,9 @@ export class Stage {
   // Queue for operations before WASM is ready
   private pendingDocument: InDocument | null = null;
   private pendingSelection: string[] | null = null;
+
+  // Document assets for image rendering (kept separate from WASM doc)
+  private assets: Record<string, Asset> = {};
 
   // Device pixel ratio for high-DPI displays
   private dpr = 1;
@@ -100,6 +104,7 @@ export class Stage {
    */
   private loadDocumentInternal(doc: InDocument): void {
     wasm.loadDocument(doc);
+    this.assets = doc.assets || {};
     this.scene = wasm.getScene();
     this.updateFrameInterval();
     this.resizeCanvas();
@@ -115,7 +120,13 @@ export class Stage {
       this.pendingDocument = doc;
       return;
     }
-    wasm.updateDocument(doc);
+    this.assets = doc.assets || {};
+    try {
+      wasm.updateDocument(doc);
+    } catch (e) {
+      console.error("[Stage] WASM updateDocument failed:", e);
+      return;
+    }
     this.scene = wasm.getScene();
     this.updateFrameInterval();
     this.needsRender = true;
@@ -302,30 +313,39 @@ export class Stage {
   private startLoop(): void {
     if (this.rafId !== null) return;
 
+    // When an image finishes loading, trigger a re-render
+    setImageLoadedCallback(() => {
+      this.needsRender = true;
+    });
+
     const loop = (time: number) => {
       this.rafId = requestAnimationFrame(loop);
 
       // Skip if WASM isn't ready yet or no document loaded
       if (!this.wasmReady || !this.scene) return;
 
-      // Check if we should advance frame (if playing)
-      const elapsed = time - this.lastFrameTime;
-      if (wasm.isPlaying() && elapsed >= this.frameInterval) {
-        this.lastFrameTime = time - (elapsed % this.frameInterval);
+      try {
+        // Check if we should advance frame (if playing)
+        const elapsed = time - this.lastFrameTime;
+        if (wasm.isPlaying() && elapsed >= this.frameInterval) {
+          this.lastFrameTime = time - (elapsed % this.frameInterval);
 
-        // Tick advances frame if playing and returns draw commands
-        const commands = wasm.tick();
-        this.lastCommands = commands || [];
-        this.render();
+          // Tick advances frame if playing and returns draw commands
+          const commands = wasm.tick();
+          this.lastCommands = commands || [];
+          this.render();
 
-        // Notify frame change
-        this.events.onFrameChange?.(wasm.getFrame());
-      } else if (!wasm.isPlaying() && this.needsRender) {
-        // Only re-render when paused if something actually changed
-        const commands = wasm.render();
-        this.lastCommands = commands || [];
-        this.render();
-        this.needsRender = false;
+          // Notify frame change
+          this.events.onFrameChange?.(wasm.getFrame());
+        } else if (!wasm.isPlaying() && this.needsRender) {
+          // Only re-render when paused if something actually changed
+          const commands = wasm.render();
+          this.lastCommands = commands || [];
+          this.render();
+          this.needsRender = false;
+        }
+      } catch (e) {
+        console.error("[Stage] Render loop error:", e);
       }
     };
 
@@ -338,6 +358,7 @@ export class Stage {
       cancelAnimationFrame(this.rafId);
       this.rafId = null;
     }
+    setImageLoadedCallback(null);
   }
 
   private render(): void {
@@ -349,6 +370,7 @@ export class Stage {
       this.lastCommands,
       this.scene.background,
       this.dpr,
+      this.assets,
     );
 
     // Render selection outline if any

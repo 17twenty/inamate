@@ -678,7 +678,22 @@ class CommandDispatcher {
             newObjects[op.parentId] = { ...parent, children };
           }
         }
-        store.setDocument({ ...doc, objects: newObjects });
+        // If a bundled asset is included (e.g. for RasterImage), add it to the document
+        let newAssets = doc.assets;
+        let newProject = doc.project;
+        if (op.asset) {
+          newAssets = { ...doc.assets, [op.asset.id]: op.asset };
+          newProject = {
+            ...doc.project,
+            assets: [...doc.project.assets, op.asset.id],
+          };
+        }
+        store.setDocument({
+          ...doc,
+          objects: newObjects,
+          assets: newAssets,
+          project: newProject,
+        });
         break;
       }
 

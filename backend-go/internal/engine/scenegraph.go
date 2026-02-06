@@ -35,6 +35,11 @@ type SceneNode struct {
 	Stroke      string
 	StrokeWidth float64
 
+	// Image data (for RasterImage nodes)
+	ImageAssetID string
+	ImageWidth   float64
+	ImageHeight  float64
+
 	// Hit testing
 	Bounds Rect // axis-aligned bounding box in world space
 }

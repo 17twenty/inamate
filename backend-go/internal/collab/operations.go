@@ -210,6 +210,19 @@ func (ds *DocumentState) applyCreate(op Operation) error {
 		return fmt.Errorf("invalid object: %w", err)
 	}
 
+	// If a bundled asset is included (e.g. for RasterImage), add it to the document
+	if op.Asset != nil {
+		var asset document.Asset
+		if err := json.Unmarshal(op.Asset, &asset); err != nil {
+			return fmt.Errorf("invalid asset: %w", err)
+		}
+		if ds.doc.Assets == nil {
+			ds.doc.Assets = make(map[string]document.Asset)
+		}
+		ds.doc.Assets[asset.ID] = asset
+		ds.doc.Project.Assets = append(ds.doc.Project.Assets, asset.ID)
+	}
+
 	// Add to objects map
 	ds.doc.Objects[obj.ID] = obj
 
