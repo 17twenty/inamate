@@ -26,6 +26,8 @@ interface MenuBarProps {
   onDeselect: () => void;
   onNewDocument: () => void;
   onExportPng: () => void;
+  onExportPngSequence: () => void;
+  isExporting?: boolean;
   onZoomIn: () => void;
   onZoomOut: () => void;
   onFitToScreen: () => void;
@@ -49,6 +51,8 @@ export function MenuBar({
   onDeselect,
   onNewDocument,
   onExportPng,
+  onExportPngSequence,
+  isExporting,
   onZoomIn,
   onZoomOut,
   onFitToScreen,
@@ -76,7 +80,16 @@ export function MenuBar({
           action: onNewDocument,
         },
         { separator: true },
-        { label: "Export as PNG", action: onExportPng },
+        {
+          label: "Export Frame as PNG",
+          action: onExportPng,
+          disabled: isExporting,
+        },
+        {
+          label: "Export PNG Sequence...",
+          action: onExportPngSequence,
+          disabled: isExporting,
+        },
       ],
     },
     {

@@ -121,4 +121,4 @@ We welcome contributions! Please check the [issues](../../issues) tab to find ar
 
 ## License
 
-[MIT](LICENSE)
+[Business Source License 1.1](LICENSE.md)

@@ -1,5 +1,5 @@
 import React, { useRef, useCallback, useState } from "react";
-import type { InDocument } from "../../types/document";
+import type { InDocument, EasingType } from "../../types/document";
 
 export interface BreadcrumbEntry {
   id: string | null; // null = scene root
@@ -31,7 +31,16 @@ interface TimelinePanelProps {
     newFrame: number,
   ) => void;
   onRecordKeyframe?: () => void;
+  onUpdateKeyframeEasing?: (keyframeId: string, easing: EasingType) => void;
 }
+
+// Easing options for the context menu
+const EASING_OPTIONS: { value: EasingType; label: string }[] = [
+  { value: "linear", label: "Linear" },
+  { value: "easeIn", label: "Ease In" },
+  { value: "easeOut", label: "Ease Out" },
+  { value: "easeInOut", label: "Ease In/Out" },
+];
 
 const LAYER_NAME_WIDTH = 144; // w-36 = 9rem = 144px
 const ROW_HEIGHT = 24; // h-6 = 1.5rem = 24px
@@ -69,6 +78,7 @@ export function TimelinePanel({
   onDeleteKeyframe,
   onMoveKeyframe,
   onRecordKeyframe,
+  onUpdateKeyframeEasing,
 }: TimelinePanelProps) {
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const [panelHeight, setPanelHeight] = useState(192); // Default h-48 = 12rem = 192px
@@ -78,6 +88,14 @@ export function TimelinePanel({
   const [expandedObjects, setExpandedObjects] = useState<Set<string>>(
     new Set(),
   );
+
+  // Context menu state for keyframe easing
+  const [contextMenu, setContextMenu] = useState<{
+    x: number;
+    y: number;
+    keyframeId: string;
+    currentEasing: EasingType;
+  } | null>(null);
 
   const toggleExpanded = useCallback((objectId: string) => {
     setExpandedObjects((prev) => {
@@ -122,7 +140,10 @@ export function TimelinePanel({
   const timeline = doc.timelines[editingTimelineId];
   const keyframesByObjectProperty = new Map<
     string,
-    Map<string, Map<number, { keyframeId: string; trackId: string }>>
+    Map<
+      string,
+      Map<number, { keyframeId: string; trackId: string; easing: EasingType }>
+    >
   >();
 
   if (timeline) {
@@ -143,7 +164,11 @@ export function TimelinePanel({
       for (const kfId of track.keys) {
         const kf = doc.keyframes[kfId];
         if (kf) {
-          propFrames.set(kf.frame, { keyframeId: kfId, trackId });
+          propFrames.set(kf.frame, {
+            keyframeId: kfId,
+            trackId,
+            easing: kf.easing || "linear",
+          });
         }
       }
     }
@@ -267,6 +292,35 @@ export function TimelinePanel({
 
     setDraggingKeyframe(null);
   }, [draggingKeyframe, onMoveKeyframe]);
+
+  // Right-click context menu for keyframe easing
+  const handleKeyframeContextMenu = useCallback(
+    (e: React.MouseEvent, keyframeId: string, currentEasing: EasingType) => {
+      e.preventDefault();
+      e.stopPropagation();
+      setContextMenu({
+        x: e.clientX,
+        y: e.clientY,
+        keyframeId,
+        currentEasing,
+      });
+    },
+    [],
+  );
+
+  const handleEasingSelect = useCallback(
+    (easing: EasingType) => {
+      if (contextMenu && onUpdateKeyframeEasing) {
+        onUpdateKeyframeEasing(contextMenu.keyframeId, easing);
+      }
+      setContextMenu(null);
+    },
+    [contextMenu, onUpdateKeyframeEasing],
+  );
+
+  const closeContextMenu = useCallback(() => {
+    setContextMenu(null);
+  }, []);
 
   // Resize handle drag
   const handleResizeStart = useCallback(
@@ -576,8 +630,15 @@ export function TimelinePanel({
                                         className={`absolute inset-0 flex items-center justify-center text-[7px] leading-none cursor-grab ${
                                           isDraggedHere
                                             ? "text-blue-400"
-                                            : "text-yellow-400"
+                                            : kfData?.easing !== "linear"
+                                              ? "text-green-400"
+                                              : "text-yellow-400"
                                         }`}
+                                        title={
+                                          kfData
+                                            ? `Easing: ${kfData.easing}`
+                                            : undefined
+                                        }
                                         onMouseDown={(e) => {
                                           if (kfData && !isDraggedHere) {
                                             handleKeyframeDragStart(
@@ -587,6 +648,15 @@ export function TimelinePanel({
                                               obj.id,
                                               prop.key,
                                               e,
+                                            );
+                                          }
+                                        }}
+                                        onContextMenu={(e) => {
+                                          if (kfData) {
+                                            handleKeyframeContextMenu(
+                                              e,
+                                              kfData.keyframeId,
+                                              kfData.easing,
                                             );
                                           }
                                         }}
@@ -628,6 +698,52 @@ export function TimelinePanel({
           </div>
         </div>
       </div>
+
+      {/* Easing context menu */}
+      {contextMenu && (
+        <>
+          {/* Backdrop to close menu */}
+          <div
+            className="fixed inset-0 z-50"
+            onClick={closeContextMenu}
+            onContextMenu={(e) => {
+              e.preventDefault();
+              closeContextMenu();
+            }}
+          />
+          {/* Menu */}
+          <div
+            className="fixed z-50 bg-gray-800 border border-gray-700 rounded shadow-lg py-1 min-w-[120px]"
+            style={{ left: contextMenu.x, top: contextMenu.y }}
+          >
+            <div className="px-2 py-1 text-[10px] text-gray-500 uppercase tracking-wide">
+              Easing
+            </div>
+            {EASING_OPTIONS.map((option) => (
+              <button
+                key={option.value}
+                onClick={() => handleEasingSelect(option.value)}
+                className={`w-full text-left px-3 py-1 text-xs hover:bg-gray-700 flex items-center gap-2 ${
+                  contextMenu.currentEasing === option.value
+                    ? "text-green-400"
+                    : "text-gray-300"
+                }`}
+              >
+                {contextMenu.currentEasing === option.value && (
+                  <span className="text-[10px]">✓</span>
+                )}
+                <span
+                  className={
+                    contextMenu.currentEasing === option.value ? "" : "ml-4"
+                  }
+                >
+                  {option.label}
+                </span>
+              </button>
+            ))}
+          </div>
+        </>
+      )}
     </div>
   );
 }

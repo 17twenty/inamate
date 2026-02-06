@@ -17,6 +17,7 @@ import { TimelinePanel } from "../components/editor/TimelinePanel";
 import type { BreadcrumbEntry } from "../components/editor/TimelinePanel";
 import { MenuBar } from "../components/editor/MenuBar";
 import { getLatestSnapshot } from "../api/projects";
+import { exportPngSequence } from "../utils/export";
 
 import { MessageTypes } from "../types/protocol";
 import type { Message } from "../types/protocol";
@@ -62,6 +63,12 @@ export function EditorPage() {
   const [showTimeline, setShowTimeline] = useState(true);
   const [showProperties, setShowProperties] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [exportProgress, setExportProgress] = useState<{
+    current: number;
+    total: number;
+    phase: string;
+  } | null>(null);
+  const [toast, setToast] = useState<string | null>(null);
 
   // Editing context stack for nested Symbol editing
   const [editingStack, setEditingStack] = useState<EditingContext[]>([]);
@@ -867,6 +874,34 @@ export function EditorPage() {
     [],
   );
 
+  const handleUpdateKeyframeEasing = useCallback(
+    (keyframeId: string, easing: Keyframe["easing"]) => {
+      // Find the track that contains this keyframe
+      const freshDoc = useEditorStore.getState().document;
+      if (!freshDoc) return;
+
+      // Search through all tracks to find the one containing this keyframe
+      let trackId: string | null = null;
+      for (const tid of Object.keys(freshDoc.tracks)) {
+        const track = freshDoc.tracks[tid];
+        if (track.keys.includes(keyframeId)) {
+          trackId = tid;
+          break;
+        }
+      }
+
+      if (!trackId) return;
+
+      commandDispatcher.dispatch({
+        type: "keyframe.update",
+        keyframeId,
+        trackId,
+        changes: { easing },
+      });
+    },
+    [],
+  );
+
   // --- Z-Order handlers ---
 
   const handleBringToFront = useCallback(() => {
@@ -968,13 +1003,23 @@ export function EditorPage() {
     handleSendBackward,
   ]);
 
+  // --- Toast helper ---
+
+  const showToast = useCallback((message: string, duration = 2000) => {
+    setToast(message);
+    setTimeout(() => setToast(null), duration);
+  }, []);
+
   // --- Record Keyframe handler ---
 
   const handleRecordKeyframe = useCallback(() => {
     // Get fresh document state from store
     const freshDoc = useEditorStore.getState().document;
 
-    if (!selectedObjectId || !freshDoc || !currentContext) return;
+    if (!selectedObjectId || !freshDoc || !currentContext) {
+      showToast("Select an object to record keyframe");
+      return;
+    }
 
     const obj = freshDoc.objects[selectedObjectId];
     if (!obj) return;
@@ -994,7 +1039,10 @@ export function EditorPage() {
     for (const property of propertiesToRecord) {
       handleAddKeyframe(selectedObjectId, frame, property);
     }
-  }, [selectedObjectId, currentContext, handleAddKeyframe]);
+
+    // Show feedback
+    showToast(`Keyframe recorded at frame ${frame}`);
+  }, [selectedObjectId, currentContext, handleAddKeyframe, showToast]);
 
   // K shortcut for record keyframe
   useEffect(() => {
@@ -1048,13 +1096,39 @@ export function EditorPage() {
   }, [navigate]);
 
   const handleExportPng = useCallback(() => {
-    const canvas = containerRef.current?.querySelector("canvas");
-    if (!canvas) return;
-    const link = document.createElement("a");
-    link.download = "inamate-export.png";
-    link.href = canvas.toDataURL("image/png");
-    link.click();
-  }, []);
+    if (!doc || !scene) return;
+
+    // Temporarily clear selection so export doesn't show selection outline
+    const previousSelection = selectedObjectId;
+    stageRef.current.setSelectedObjectId(null);
+    stageRef.current.invalidate();
+
+    // Wait for next frame to ensure render completes without selection
+    requestAnimationFrame(() => {
+      const canvas = containerRef.current?.querySelector("canvas");
+      if (!canvas) {
+        // Restore selection
+        stageRef.current.setSelectedObjectId(previousSelection);
+        return;
+      }
+
+      // Create filename from project name
+      const safeName = doc.project.name
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, "-")
+        .replace(/^-|-$/g, "");
+      const filename = `${safeName || "inamate-export"}-frame-${currentFrame}.png`;
+
+      const link = document.createElement("a");
+      link.download = filename;
+      link.href = canvas.toDataURL("image/png");
+      link.click();
+
+      // Restore selection
+      stageRef.current.setSelectedObjectId(previousSelection);
+      stageRef.current.invalidate();
+    });
+  }, [doc, scene, selectedObjectId, currentFrame]);
 
   const handleZoomIn = useCallback(() => {
     // Placeholder
@@ -1074,6 +1148,38 @@ export function EditorPage() {
     const tl = doc.timelines[currentContext.timelineId];
     return tl?.length || 48;
   }, [doc, currentContext]);
+
+  const handleExportPngSequence = useCallback(async () => {
+    if (!doc || !scene) return;
+
+    const canvas = containerRef.current?.querySelector("canvas");
+    if (!canvas) return;
+
+    // Store current state to restore after export
+    const previousSelection = selectedObjectId;
+    const previousFrame = currentFrame;
+
+    // Clear selection for clean export
+    stageRef.current.setSelectedObjectId(null);
+
+    try {
+      await exportPngSequence(
+        stageRef.current,
+        canvas,
+        doc.project.name,
+        totalFrames,
+        (progress) => setExportProgress(progress),
+      );
+    } catch (error) {
+      console.error("Export failed:", error);
+    } finally {
+      // Restore previous state
+      setExportProgress(null);
+      stageRef.current.seek(previousFrame);
+      stageRef.current.setSelectedObjectId(previousSelection);
+      stageRef.current.invalidate();
+    }
+  }, [doc, scene, selectedObjectId, currentFrame, totalFrames]);
 
   const selectedObject = useMemo(() => {
     if (!doc || !selectedObjectId) return null;
@@ -1145,6 +1251,8 @@ export function EditorPage() {
         onDeselect={handleDeselect}
         onNewDocument={handleNewDocument}
         onExportPng={handleExportPng}
+        onExportPngSequence={handleExportPngSequence}
+        isExporting={exportProgress !== null}
         onZoomIn={handleZoomIn}
         onZoomOut={handleZoomOut}
         onFitToScreen={handleFitToScreen}
@@ -1218,7 +1326,45 @@ export function EditorPage() {
           onDeleteKeyframe={handleDeleteKeyframe}
           onMoveKeyframe={handleMoveKeyframe}
           onRecordKeyframe={handleRecordKeyframe}
+          onUpdateKeyframeEasing={handleUpdateKeyframeEasing}
         />
+      )}
+
+      {/* Export progress overlay */}
+      {exportProgress && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+          <div className="rounded-lg bg-gray-800 p-6 shadow-xl">
+            <div className="mb-3 text-sm text-gray-300">
+              {exportProgress.phase === "rendering" && (
+                <>
+                  Rendering frame {exportProgress.current} of{" "}
+                  {exportProgress.total}...
+                </>
+              )}
+              {exportProgress.phase === "zipping" && <>Creating zip file...</>}
+              {exportProgress.phase === "downloading" && (
+                <>Starting download...</>
+              )}
+            </div>
+            <div className="h-2 w-64 overflow-hidden rounded-full bg-gray-700">
+              <div
+                className="h-full bg-blue-500 transition-all duration-100"
+                style={{
+                  width: `${(exportProgress.current / exportProgress.total) * 100}%`,
+                }}
+              />
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Toast notification */}
+      {toast && (
+        <div className="fixed bottom-20 left-1/2 z-50 -translate-x-1/2">
+          <div className="rounded-lg bg-gray-800 px-4 py-2 text-sm text-gray-200 shadow-lg border border-gray-700">
+            {toast}
+          </div>
+        </div>
       )}
     </div>
   );
