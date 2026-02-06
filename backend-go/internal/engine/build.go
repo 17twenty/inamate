@@ -8,7 +8,9 @@ import (
 )
 
 // BuildSceneGraph builds a render-ready scene graph from the document at the given frame.
-func BuildSceneGraph(doc *document.InDocument, sceneID string, frame int, rootTimelineID string) *SceneGraph {
+// If playing is true, animation keyframes are evaluated and applied to transforms.
+// If playing is false, the document's raw transform values are used (edit mode).
+func BuildSceneGraph(doc *document.InDocument, sceneID string, frame int, rootTimelineID string, playing bool) *SceneGraph {
 	sg := NewSceneGraph()
 
 	scene, ok := doc.Scenes[sceneID]
@@ -21,11 +23,17 @@ func BuildSceneGraph(doc *document.InDocument, sceneID string, frame int, rootTi
 		return sg
 	}
 
-	// Evaluate the root timeline to get property overrides
-	overrides := EvaluateTimeline(doc, rootTimelineID, frame)
+	// Only evaluate timeline overrides when playing (preview mode)
+	// In edit mode, show the document's actual transform values
+	var overrides map[string]PropertyOverrides
+	if playing {
+		overrides = EvaluateTimeline(doc, rootTimelineID, frame)
+	} else {
+		overrides = make(map[string]PropertyOverrides)
+	}
 
 	// Build the tree starting from root
-	sg.Root = buildNode(doc, &rootObj, nil, Identity(), 1.0, overrides, frame, sg)
+	sg.Root = buildNode(doc, &rootObj, nil, Identity(), 1.0, overrides, frame, sg, playing)
 	sg.Dirty = false
 
 	return sg
@@ -41,13 +49,15 @@ func buildNode(
 	overrides map[string]PropertyOverrides,
 	frame int,
 	sg *SceneGraph,
+	playing bool,
 ) *SceneNode {
 	if !obj.Visible {
 		return nil
 	}
 
 	// For Symbols, evaluate their nested timeline FIRST so overrides apply to the Symbol itself
-	if obj.Type == document.ObjectTypeSymbol {
+	// Only evaluate when playing
+	if playing && obj.Type == document.ObjectTypeSymbol {
 		symbolTimelineID := GetSymbolTimelineID(obj.Data)
 		if symbolTimelineID != "" {
 			// Evaluate the symbol's timeline and merge overrides
@@ -125,7 +135,7 @@ func buildNode(
 			continue
 		}
 
-		childNode := buildNode(doc, &childObj, node, worldMatrix, opacity, overrides, frame, sg)
+		childNode := buildNode(doc, &childObj, node, worldMatrix, opacity, overrides, frame, sg, playing)
 		if childNode != nil {
 			node.Children = append(node.Children, childNode)
 

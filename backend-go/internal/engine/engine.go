@@ -159,6 +159,7 @@ func (e *Engine) Render() string {
 			e.sceneID,
 			e.frame,
 			e.doc.Project.RootTimeline,
+			e.playing, // Only apply animation overrides when playing
 		)
 		e.dirty = false
 	}

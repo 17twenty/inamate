@@ -25,6 +25,11 @@ interface TimelinePanelProps {
   // Keyframe editing
   onAddKeyframe?: (objectId: string, frame: number, property: string) => void;
   onDeleteKeyframe?: (keyframeId: string, trackId: string) => void;
+  onMoveKeyframe?: (
+    keyframeId: string,
+    trackId: string,
+    newFrame: number,
+  ) => void;
 }
 
 const LAYER_NAME_WIDTH = 144; // w-36 = 9rem = 144px
@@ -50,10 +55,19 @@ export function TimelinePanel({
   onNavigateBreadcrumb,
   onAddKeyframe,
   onDeleteKeyframe,
+  onMoveKeyframe,
 }: TimelinePanelProps) {
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const [panelHeight, setPanelHeight] = useState(192); // Default h-48 = 12rem = 192px
   const resizingRef = useRef(false);
+
+  // Keyframe drag state
+  const [draggingKeyframe, setDraggingKeyframe] = useState<{
+    keyframeId: string;
+    trackId: string;
+    startFrame: number;
+    currentFrame: number;
+  } | null>(null);
 
   // Get children of the editing context (scene root or symbol)
   const layerObjects = (() => {
@@ -143,6 +157,65 @@ export function TimelinePanel({
     },
     [keyframesByObject, onAddKeyframe, onDeleteKeyframe],
   );
+
+  // Keyframe drag handlers
+  const handleKeyframeDragStart = useCallback(
+    (
+      keyframeId: string,
+      trackId: string,
+      frame: number,
+      e: React.MouseEvent,
+    ) => {
+      e.stopPropagation();
+      e.preventDefault();
+      setDraggingKeyframe({
+        keyframeId,
+        trackId,
+        startFrame: frame,
+        currentFrame: frame,
+      });
+    },
+    [],
+  );
+
+  const handleKeyframeDragMove = useCallback(
+    (e: React.MouseEvent<HTMLDivElement>) => {
+      if (!draggingKeyframe) return;
+
+      const rect = e.currentTarget.getBoundingClientRect();
+      const x = e.clientX - rect.left - LAYER_NAME_WIDTH;
+      const frame = Math.max(
+        0,
+        Math.min(totalFrames - 1, Math.floor(x / frameWidth)),
+      );
+
+      if (frame !== draggingKeyframe.currentFrame) {
+        setDraggingKeyframe({
+          ...draggingKeyframe,
+          currentFrame: frame,
+        });
+      }
+    },
+    [draggingKeyframe, totalFrames],
+  );
+
+  const handleKeyframeDragEnd = useCallback(() => {
+    if (!draggingKeyframe) return;
+
+    // Only dispatch move if frame actually changed
+    if (
+      draggingKeyframe.currentFrame !== draggingKeyframe.startFrame &&
+      onMoveKeyframe
+    ) {
+      onMoveKeyframe(
+        draggingKeyframe.keyframeId,
+        draggingKeyframe.trackId,
+        draggingKeyframe.currentFrame,
+      );
+    }
+
+    setDraggingKeyframe(null);
+  }, [draggingKeyframe, onMoveKeyframe]);
 
   // Resize handle drag
   const handleResizeStart = useCallback(
@@ -271,8 +344,15 @@ export function TimelinePanel({
           {/* Layer rows */}
           <div
             className="relative"
-            onMouseDown={handleScrub}
-            onMouseMove={handleScrubDrag}
+            onMouseMove={(e) => {
+              if (draggingKeyframe) {
+                handleKeyframeDragMove(e);
+              } else {
+                handleScrubDrag(e);
+              }
+            }}
+            onMouseUp={handleKeyframeDragEnd}
+            onMouseLeave={handleKeyframeDragEnd}
           >
             {layerObjects.map((obj) => {
               const objKeyframes = keyframesByObject.get(obj.id);
@@ -315,7 +395,21 @@ export function TimelinePanel({
                     }`}
                   >
                     {Array.from({ length: visibleFrames }, (_, i) => {
-                      const hasKeyframe = objKeyframes?.has(i);
+                      const keyframeData = objKeyframes?.get(i);
+                      const hasKeyframe = !!keyframeData;
+                      // Show keyframe at current drag position
+                      const isDraggedHere =
+                        draggingKeyframe?.currentFrame === i &&
+                        keyframesByObject
+                          .get(obj.id)
+                          ?.get(draggingKeyframe.startFrame)?.keyframeId ===
+                          draggingKeyframe.keyframeId;
+                      // Hide keyframe at original position during drag
+                      const isBeingDragged =
+                        draggingKeyframe &&
+                        keyframeData?.keyframeId ===
+                          draggingKeyframe.keyframeId;
+
                       return (
                         <div
                           key={i}
@@ -323,15 +417,32 @@ export function TimelinePanel({
                             i === 0 ? "bg-gray-700/30" : ""
                           }`}
                           style={{ width: frameWidth, height: ROW_HEIGHT }}
+                          onClick={() => onFrameChange(i)}
                           onDoubleClick={(e) =>
                             handleFrameCellDoubleClick(obj.id, i, e)
                           }
                         >
-                          {hasKeyframe && (
-                            <span className="absolute inset-0 flex items-center justify-center text-[8px] leading-none text-yellow-400">
+                          {(hasKeyframe && !isBeingDragged) || isDraggedHere ? (
+                            <span
+                              className={`absolute inset-0 flex items-center justify-center text-[8px] leading-none cursor-grab ${
+                                isDraggedHere
+                                  ? "text-blue-400"
+                                  : "text-yellow-400"
+                              }`}
+                              onMouseDown={(e) => {
+                                if (keyframeData && !isDraggedHere) {
+                                  handleKeyframeDragStart(
+                                    keyframeData.keyframeId,
+                                    keyframeData.trackId,
+                                    i,
+                                    e,
+                                  );
+                                }
+                              }}
+                            >
                               &#9670;
                             </span>
-                          )}
+                          ) : null}
                         </div>
                       );
                     })}

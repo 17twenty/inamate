@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"log/slog"
 	"sync"
+	"time"
 
 	"github.com/inamate/inamate/backend-go/internal/document"
 )
@@ -27,24 +28,34 @@ func NewRoom(projectID string, initialDoc *document.InDocument) *Room {
 // DocumentLoader loads a document for a project
 type DocumentLoader func(projectID string) (*document.InDocument, error)
 
+// DocumentSaver saves a document for a project
+type DocumentSaver func(projectID string, doc *document.InDocument) error
+
 type Hub struct {
 	mu         sync.RWMutex
 	rooms      map[string]*Room // projectID -> room
 	register   chan *Client
 	unregister chan *Client
 	loadDoc    DocumentLoader // Function to load documents
+	saveDoc    DocumentSaver  // Function to save documents
+	stopSaver  chan struct{}  // Signal to stop periodic saver
 }
 
-func NewHub(loadDoc DocumentLoader) *Hub {
+func NewHub(loadDoc DocumentLoader, saveDoc DocumentSaver) *Hub {
 	return &Hub{
 		rooms:      make(map[string]*Room),
 		register:   make(chan *Client),
 		unregister: make(chan *Client),
 		loadDoc:    loadDoc,
+		saveDoc:    saveDoc,
+		stopSaver:  make(chan struct{}),
 	}
 }
 
 func (h *Hub) Run() {
+	// Start periodic saver
+	go h.periodicSaver()
+
 	for {
 		select {
 		case client := <-h.register:
@@ -53,6 +64,60 @@ func (h *Hub) Run() {
 			h.removeClient(client)
 		}
 	}
+}
+
+// Stop gracefully shuts down the hub, saving all dirty documents
+func (h *Hub) Stop() {
+	close(h.stopSaver)
+	h.saveAllDirtyRooms()
+}
+
+// periodicSaver saves dirty documents every 30 seconds
+func (h *Hub) periodicSaver() {
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ticker.C:
+			h.saveAllDirtyRooms()
+		case <-h.stopSaver:
+			return
+		}
+	}
+}
+
+// saveAllDirtyRooms saves all rooms with unsaved changes
+func (h *Hub) saveAllDirtyRooms() {
+	h.mu.RLock()
+	roomsToSave := make(map[string]*Room)
+	for projectID, room := range h.rooms {
+		if room.docState.IsDirty() {
+			roomsToSave[projectID] = room
+		}
+	}
+	h.mu.RUnlock()
+
+	for projectID, room := range roomsToSave {
+		h.saveRoom(projectID, room)
+	}
+}
+
+// saveRoom saves a single room's document
+func (h *Hub) saveRoom(projectID string, room *Room) {
+	if h.saveDoc == nil {
+		slog.Warn("no document saver configured, skipping save", "project", projectID)
+		return
+	}
+
+	doc := room.docState.GetDocument()
+	if err := h.saveDoc(projectID, doc); err != nil {
+		slog.Error("failed to save document", "project", projectID, "error", err)
+		return
+	}
+
+	room.docState.MarkClean()
+	slog.Info("document saved", "project", projectID)
 }
 
 func (h *Hub) Register(client *Client) {
@@ -133,10 +198,17 @@ func (h *Hub) removeClient(client *Client) {
 	close(client.send)
 	room.presence.Remove(client.UserID)
 
-	if len(room.clients) == 0 {
+	// Save and close room when last client leaves
+	shouldSave := len(room.clients) == 0
+	if shouldSave {
 		delete(h.rooms, client.ProjectID)
 	}
 	h.mu.Unlock()
+
+	// Save outside the lock to avoid blocking other operations
+	if shouldSave && room.docState.IsDirty() {
+		h.saveRoom(client.ProjectID, room)
+	}
 
 	// Broadcast leave to remaining clients
 	leavePayload, _ := json.Marshal(PresenceLeavePayload{

@@ -15,6 +15,7 @@ type DocumentState struct {
 	doc       *document.InDocument
 	serverSeq int64
 	opLog     []Operation // Operation history for persistence
+	dirty     bool        // Has unsaved changes
 }
 
 // NewDocumentState creates a new document state from an initial document
@@ -23,7 +24,22 @@ func NewDocumentState(doc *document.InDocument) *DocumentState {
 		doc:       doc,
 		serverSeq: 0,
 		opLog:     make([]Operation, 0),
+		dirty:     false,
 	}
+}
+
+// IsDirty returns whether the document has unsaved changes
+func (ds *DocumentState) IsDirty() bool {
+	ds.mu.RLock()
+	defer ds.mu.RUnlock()
+	return ds.dirty
+}
+
+// MarkClean marks the document as saved
+func (ds *DocumentState) MarkClean() {
+	ds.mu.Lock()
+	defer ds.mu.Unlock()
+	ds.dirty = false
 }
 
 // GetDocument returns a copy of the current document
@@ -45,6 +61,7 @@ func (ds *DocumentState) ApplyOperation(op Operation) (int64, error) {
 
 	ds.serverSeq++
 	ds.opLog = append(ds.opLog, op)
+	ds.dirty = true
 
 	return ds.serverSeq, nil
 }
@@ -70,6 +87,10 @@ func (ds *DocumentState) applyOperationLocked(op Operation) error {
 		return ds.applySceneUpdate(op)
 	case "project.rename":
 		return ds.applyProjectRename(op)
+	case "track.create":
+		return ds.applyTrackCreate(op)
+	case "track.delete":
+		return ds.applyTrackDelete(op)
 	case "keyframe.add":
 		return ds.applyKeyframeAdd(op)
 	case "keyframe.update":
@@ -315,16 +336,110 @@ func (ds *DocumentState) applyProjectRename(op Operation) error {
 	return nil
 }
 
-func (ds *DocumentState) applyKeyframeAdd(op Operation) error {
-	// Validate required fields
-	if op.KeyframeID == "" {
-		return fmt.Errorf("keyframeId is required")
+func (ds *DocumentState) applyTrackCreate(op Operation) error {
+	if op.TimelineID == "" {
+		return fmt.Errorf("timelineId is required")
 	}
+	if op.Track == nil {
+		return fmt.Errorf("track is required")
+	}
+
+	// Parse the track data
+	var trackData struct {
+		ID       string   `json:"id"`
+		ObjectID string   `json:"objectId"`
+		Property string   `json:"property"`
+		Keys     []string `json:"keys"`
+	}
+	if err := json.Unmarshal(op.Track, &trackData); err != nil {
+		return fmt.Errorf("invalid track data: %w", err)
+	}
+
+	// Get the timeline
+	timeline, ok := ds.doc.Timelines[op.TimelineID]
+	if !ok {
+		return fmt.Errorf("timeline not found: %s", op.TimelineID)
+	}
+
+	// Create the track
+	track := document.Track{
+		ID:       trackData.ID,
+		ObjectID: trackData.ObjectID,
+		Property: trackData.Property,
+		Keys:     trackData.Keys,
+	}
+	if track.Keys == nil {
+		track.Keys = []string{}
+	}
+
+	// Add to tracks map
+	ds.doc.Tracks[trackData.ID] = track
+
+	// Add track ID to timeline's tracks array
+	timeline.Tracks = append(timeline.Tracks, trackData.ID)
+	ds.doc.Timelines[op.TimelineID] = timeline
+
+	return nil
+}
+
+func (ds *DocumentState) applyTrackDelete(op Operation) error {
 	if op.TrackID == "" {
 		return fmt.Errorf("trackId is required")
 	}
-	if op.Frame == nil {
-		return fmt.Errorf("frame is required")
+	if op.TimelineID == "" {
+		return fmt.Errorf("timelineId is required")
+	}
+
+	// Get the timeline
+	timeline, ok := ds.doc.Timelines[op.TimelineID]
+	if !ok {
+		return fmt.Errorf("timeline not found: %s", op.TimelineID)
+	}
+
+	// Remove track from timeline's tracks array
+	newTracks := make([]string, 0, len(timeline.Tracks))
+	for _, tid := range timeline.Tracks {
+		if tid != op.TrackID {
+			newTracks = append(newTracks, tid)
+		}
+	}
+	timeline.Tracks = newTracks
+	ds.doc.Timelines[op.TimelineID] = timeline
+
+	// Remove from tracks map
+	delete(ds.doc.Tracks, op.TrackID)
+
+	return nil
+}
+
+func (ds *DocumentState) applyKeyframeAdd(op Operation) error {
+	if op.TrackID == "" {
+		return fmt.Errorf("trackId is required")
+	}
+
+	// Parse keyframe from nested object
+	var kfData struct {
+		ID     string          `json:"id"`
+		Frame  int             `json:"frame"`
+		Value  json.RawMessage `json:"value"`
+		Easing string          `json:"easing"`
+	}
+	if op.Keyframe != nil {
+		if err := json.Unmarshal(op.Keyframe, &kfData); err != nil {
+			return fmt.Errorf("invalid keyframe data: %w", err)
+		}
+	} else {
+		// Fallback to flat fields for backwards compatibility
+		if op.KeyframeID == "" {
+			return fmt.Errorf("keyframeId is required")
+		}
+		if op.Frame == nil {
+			return fmt.Errorf("frame is required")
+		}
+		kfData.ID = op.KeyframeID
+		kfData.Frame = *op.Frame
+		kfData.Value = op.Value
+		kfData.Easing = op.Easing
 	}
 
 	// Get the track
@@ -335,33 +450,33 @@ func (ds *DocumentState) applyKeyframeAdd(op Operation) error {
 
 	// Create the keyframe
 	easing := document.EasingLinear
-	if op.Easing != "" {
-		easing = document.EasingType(op.Easing)
+	if kfData.Easing != "" {
+		easing = document.EasingType(kfData.Easing)
 	}
 
 	keyframe := document.Keyframe{
-		ID:     op.KeyframeID,
-		Frame:  *op.Frame,
-		Value:  op.Value,
+		ID:     kfData.ID,
+		Frame:  kfData.Frame,
+		Value:  kfData.Value,
 		Easing: easing,
 	}
 
 	// Add to keyframes map
-	ds.doc.Keyframes[op.KeyframeID] = keyframe
+	ds.doc.Keyframes[kfData.ID] = keyframe
 
 	// Add to track's keys array (maintain sorted order by frame)
 	inserted := false
 	newKeys := make([]string, 0, len(track.Keys)+1)
 	for _, keyID := range track.Keys {
 		existingKey, exists := ds.doc.Keyframes[keyID]
-		if exists && !inserted && existingKey.Frame > *op.Frame {
-			newKeys = append(newKeys, op.KeyframeID)
+		if exists && !inserted && existingKey.Frame > kfData.Frame {
+			newKeys = append(newKeys, kfData.ID)
 			inserted = true
 		}
 		newKeys = append(newKeys, keyID)
 	}
 	if !inserted {
-		newKeys = append(newKeys, op.KeyframeID)
+		newKeys = append(newKeys, kfData.ID)
 	}
 	track.Keys = newKeys
 	ds.doc.Tracks[op.TrackID] = track
@@ -379,21 +494,45 @@ func (ds *DocumentState) applyKeyframeUpdate(op Operation) error {
 		return fmt.Errorf("keyframe not found: %s", op.KeyframeID)
 	}
 
-	// Update fields if provided
-	if op.Frame != nil {
-		keyframe.Frame = *op.Frame
-	}
-	if op.Value != nil {
-		keyframe.Value = op.Value
-	}
-	if op.Easing != "" {
-		keyframe.Easing = document.EasingType(op.Easing)
+	// Parse changes from nested object if present
+	var newFrame *int
+	if op.Changes != nil {
+		var changes struct {
+			Frame  *int            `json:"frame,omitempty"`
+			Value  json.RawMessage `json:"value,omitempty"`
+			Easing string          `json:"easing,omitempty"`
+		}
+		if err := json.Unmarshal(op.Changes, &changes); err != nil {
+			return fmt.Errorf("invalid changes data: %w", err)
+		}
+		if changes.Frame != nil {
+			keyframe.Frame = *changes.Frame
+			newFrame = changes.Frame
+		}
+		if changes.Value != nil {
+			keyframe.Value = changes.Value
+		}
+		if changes.Easing != "" {
+			keyframe.Easing = document.EasingType(changes.Easing)
+		}
+	} else {
+		// Fallback to flat fields for backwards compatibility
+		if op.Frame != nil {
+			keyframe.Frame = *op.Frame
+			newFrame = op.Frame
+		}
+		if op.Value != nil {
+			keyframe.Value = op.Value
+		}
+		if op.Easing != "" {
+			keyframe.Easing = document.EasingType(op.Easing)
+		}
 	}
 
 	ds.doc.Keyframes[op.KeyframeID] = keyframe
 
 	// If frame changed, re-sort the track's keys
-	if op.Frame != nil && op.TrackID != "" {
+	if newFrame != nil && op.TrackID != "" {
 		track, ok := ds.doc.Tracks[op.TrackID]
 		if ok {
 			// Remove and re-insert to maintain sort order
@@ -409,7 +548,7 @@ func (ds *DocumentState) applyKeyframeUpdate(op Operation) error {
 			sortedKeys := make([]string, 0, len(newKeys)+1)
 			for _, keyID := range newKeys {
 				existingKey, exists := ds.doc.Keyframes[keyID]
-				if exists && !inserted && existingKey.Frame > *op.Frame {
+				if exists && !inserted && existingKey.Frame > *newFrame {
 					sortedKeys = append(sortedKeys, op.KeyframeID)
 					inserted = true
 				}

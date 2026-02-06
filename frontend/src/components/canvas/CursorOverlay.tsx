@@ -5,12 +5,16 @@ interface CursorOverlayProps {
   canvasWidth: number;
   canvasHeight: number;
   containerRef: React.RefObject<HTMLDivElement | null>;
+  pan?: { x: number; y: number };
+  zoom?: number;
 }
 
 export function CursorOverlay({
   canvasWidth,
   canvasHeight,
   containerRef,
+  pan = { x: 0, y: 0 },
+  zoom = 1,
 }: CursorOverlayProps) {
   const presences = useEditorStore((s) => s.presences);
   const localUserId = useEditorStore((s) => s.localUserId);
@@ -25,18 +29,15 @@ export function CursorOverlay({
     const container = containerRef.current;
     if (!container) return;
 
-    const rect = container.getBoundingClientRect();
-    const canvas = container.querySelector("canvas");
-    if (!canvas) return;
-
-    const canvasRect = canvas.getBoundingClientRect();
+    // With pan/zoom, we calculate position based on pan offset and zoom level
+    // Scene coordinates are transformed: screenX = pan.x + sceneX * zoom
     setLayout({
-      offsetX: canvasRect.left - rect.left,
-      offsetY: canvasRect.top - rect.top,
-      scaleX: canvasRect.width / canvasWidth,
-      scaleY: canvasRect.height / canvasHeight,
+      offsetX: pan.x,
+      offsetY: pan.y,
+      scaleX: zoom,
+      scaleY: zoom,
     });
-  }, [containerRef, canvasWidth, canvasHeight]);
+  }, [containerRef, pan, zoom]);
 
   useEffect(() => {
     updateLayout();

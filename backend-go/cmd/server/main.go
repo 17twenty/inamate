@@ -66,7 +66,34 @@ func main() {
 		return &doc, nil
 	}
 
-	hub := collab.NewHub(docLoader)
+	// Document saver for the collaboration hub
+	docSaver := func(projectID string, doc *document.InDocument) error {
+		docJSON, err := json.Marshal(doc)
+		if err != nil {
+			return fmt.Errorf("marshal document: %w", err)
+		}
+
+		// Get current version to increment
+		currentSnap, err := queries.GetLatestSnapshot(context.Background(), projectID)
+		nextVersion := int32(1)
+		if err == nil {
+			nextVersion = currentSnap.Version + 1
+		}
+
+		_, err = queries.CreateSnapshot(context.Background(), dbgen.CreateSnapshotParams{
+			ID:        fmt.Sprintf("snap_%s", uuid.New().String()[:8]),
+			ProjectID: projectID,
+			Version:   nextVersion,
+			Document:  docJSON,
+		})
+		if err != nil {
+			return fmt.Errorf("create snapshot: %w", err)
+		}
+
+		return nil
+	}
+
+	hub := collab.NewHub(docLoader, docSaver)
 	go hub.Run()
 
 	r := mux.NewRouter()
@@ -120,6 +147,11 @@ func main() {
 		<-sigCh
 
 		slog.Info("shutting down server")
+
+		// Stop hub first to save all dirty documents
+		slog.Info("saving all documents...")
+		hub.Stop()
+
 		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer shutdownCancel()
 		srv.Shutdown(shutdownCtx)

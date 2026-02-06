@@ -7,11 +7,10 @@ import { usePresence } from "../hooks/usePresence";
 import { Stage } from "../engine/Stage";
 import { commandDispatcher } from "../engine/commandDispatcher";
 import {
-  CanvasSurface,
+  CanvasViewport,
   type DragType,
-} from "../components/canvas/CanvasSurface";
+} from "../components/canvas/CanvasViewport";
 import type { Bounds } from "../engine/commands";
-import { CursorOverlay } from "../components/canvas/CursorOverlay";
 import { Toolbar, type Tool } from "../components/editor/Toolbar";
 import { PropertiesPanel } from "../components/editor/PropertiesPanel";
 import { TimelinePanel } from "../components/editor/TimelinePanel";
@@ -65,8 +64,9 @@ export function EditorPage() {
   // Editing context stack for nested Symbol editing
   const [editingStack, setEditingStack] = useState<EditingContext[]>([]);
 
-  // Track shift key state for scale modifier
+  // Track modifier key states
   const shiftHeldRef = useRef(false);
+  const [spaceHeld, setSpaceHeld] = useState(false);
 
   // Drag state
   const dragRef = useRef<{
@@ -158,6 +158,12 @@ export function EditorPage() {
         shiftHeldRef.current = true;
       }
 
+      // Track space key for pan mode
+      if (e.key === " " && !e.repeat) {
+        e.preventDefault();
+        setSpaceHeld(true);
+      }
+
       // Cmd+Z (Mac) or Ctrl+Z (Windows/Linux)
       if ((e.metaKey || e.ctrlKey) && e.key === "z") {
         e.preventDefault();
@@ -179,6 +185,9 @@ export function EditorPage() {
     const handleKeyUp = (e: KeyboardEvent) => {
       if (e.key === "Shift") {
         shiftHeldRef.current = false;
+      }
+      if (e.key === " ") {
+        setSpaceHeld(false);
       }
     };
 
@@ -710,6 +719,29 @@ export function EditorPage() {
 
   // --- Keyframe handlers ---
 
+  // Helper to get property value from object
+  const getPropertyValue = useCallback(
+    (obj: ObjectNode, property: string): number => {
+      switch (property) {
+        case "transform.x":
+          return obj.transform.x;
+        case "transform.y":
+          return obj.transform.y;
+        case "transform.sx":
+          return obj.transform.sx;
+        case "transform.sy":
+          return obj.transform.sy;
+        case "transform.r":
+          return obj.transform.r;
+        case "style.opacity":
+          return obj.style.opacity;
+        default:
+          return 0;
+      }
+    },
+    [],
+  );
+
   const handleAddKeyframe = useCallback(
     (objectId: string, frame: number, property: string) => {
       if (!doc || !currentContext) return;
@@ -717,7 +749,10 @@ export function EditorPage() {
       const timeline = doc.timelines[currentContext.timelineId];
       if (!timeline) return;
 
-      // Find or we'll need to create a track for this object/property
+      const obj = doc.objects[objectId];
+      if (!obj) return;
+
+      // Find existing track for this object/property
       let trackId = timeline.tracks.find((tid) => {
         const track = doc.tracks[tid];
         return (
@@ -725,26 +760,29 @@ export function EditorPage() {
         );
       });
 
-      // For now, if no track exists, we can't add keyframes
-      // (Track creation would be a separate operation)
+      // If no track exists, create one first
       if (!trackId) {
-        console.warn("No track found for object/property, cannot add keyframe");
-        return;
+        trackId = crypto.randomUUID();
+        commandDispatcher.dispatch({
+          type: "track.create",
+          track: {
+            id: trackId,
+            objectId,
+            property,
+            keys: [],
+          },
+          timelineId: currentContext.timelineId,
+        });
       }
 
+      // Now add the keyframe
       const keyframeId = crypto.randomUUID();
-      const obj = doc.objects[objectId];
-      if (!obj) return;
-
-      // Get current value based on property
-      let value: unknown = 0;
-      if (property === "transform.x") value = obj.transform.x;
-      else if (property === "transform.y") value = obj.transform.y;
+      const value = getPropertyValue(obj, property);
 
       const keyframe: Keyframe = {
         id: keyframeId,
         frame,
-        value: value as number,
+        value,
         easing: "linear",
       };
 
@@ -754,7 +792,7 @@ export function EditorPage() {
         keyframe,
       });
     },
-    [doc, currentContext],
+    [doc, currentContext, getPropertyValue],
   );
 
   const handleDeleteKeyframe = useCallback(
@@ -767,6 +805,119 @@ export function EditorPage() {
     },
     [],
   );
+
+  const handleMoveKeyframe = useCallback(
+    (keyframeId: string, trackId: string, newFrame: number) => {
+      commandDispatcher.dispatch({
+        type: "keyframe.update",
+        keyframeId,
+        trackId, // Include trackId so backend can re-sort keys
+        changes: { frame: newFrame },
+      });
+    },
+    [],
+  );
+
+  // --- Z-Order handlers ---
+
+  const handleBringToFront = useCallback(() => {
+    if (!selectedObjectId || !doc) return;
+    const obj = doc.objects[selectedObjectId];
+    if (!obj?.parent) return;
+    const parent = doc.objects[obj.parent];
+    if (!parent) return;
+    const currentIndex = parent.children.indexOf(selectedObjectId);
+    if (currentIndex === parent.children.length - 1) return; // Already at front
+
+    commandDispatcher.dispatch({
+      type: "object.reparent",
+      objectId: selectedObjectId,
+      newParentId: obj.parent,
+      newIndex: parent.children.length - 1,
+    });
+  }, [selectedObjectId, doc]);
+
+  const handleSendToBack = useCallback(() => {
+    if (!selectedObjectId || !doc) return;
+    const obj = doc.objects[selectedObjectId];
+    if (!obj?.parent) return;
+    const parent = doc.objects[obj.parent];
+    if (!parent) return;
+    const currentIndex = parent.children.indexOf(selectedObjectId);
+    if (currentIndex === 0) return; // Already at back
+
+    commandDispatcher.dispatch({
+      type: "object.reparent",
+      objectId: selectedObjectId,
+      newParentId: obj.parent,
+      newIndex: 0,
+    });
+  }, [selectedObjectId, doc]);
+
+  const handleBringForward = useCallback(() => {
+    if (!selectedObjectId || !doc) return;
+    const obj = doc.objects[selectedObjectId];
+    if (!obj?.parent) return;
+    const parent = doc.objects[obj.parent];
+    if (!parent) return;
+    const currentIndex = parent.children.indexOf(selectedObjectId);
+    if (currentIndex >= parent.children.length - 1) return; // Already at front
+
+    commandDispatcher.dispatch({
+      type: "object.reparent",
+      objectId: selectedObjectId,
+      newParentId: obj.parent,
+      newIndex: currentIndex + 2, // +2 because removal shifts indices
+    });
+  }, [selectedObjectId, doc]);
+
+  const handleSendBackward = useCallback(() => {
+    if (!selectedObjectId || !doc) return;
+    const obj = doc.objects[selectedObjectId];
+    if (!obj?.parent) return;
+    const parent = doc.objects[obj.parent];
+    if (!parent) return;
+    const currentIndex = parent.children.indexOf(selectedObjectId);
+    if (currentIndex <= 0) return; // Already at back
+
+    commandDispatcher.dispatch({
+      type: "object.reparent",
+      objectId: selectedObjectId,
+      newParentId: obj.parent,
+      newIndex: currentIndex - 1,
+    });
+  }, [selectedObjectId, doc]);
+
+  // Z-order keyboard shortcuts (separate useEffect since handlers defined above)
+  useEffect(() => {
+    const handleZOrderKeys = (e: KeyboardEvent) => {
+      // Z-order shortcuts: Cmd+]/[ and Cmd+Shift+]/[
+      if ((e.metaKey || e.ctrlKey) && e.key === "]") {
+        e.preventDefault();
+        if (e.shiftKey) {
+          handleBringToFront();
+        } else {
+          handleBringForward();
+        }
+      }
+      if ((e.metaKey || e.ctrlKey) && e.key === "[") {
+        e.preventDefault();
+        if (e.shiftKey) {
+          handleSendToBack();
+        } else {
+          handleSendBackward();
+        }
+      }
+    };
+
+    window.addEventListener("keydown", handleZOrderKeys);
+    return () => window.removeEventListener("keydown", handleZOrderKeys);
+  }, [
+    handleBringToFront,
+    handleSendToBack,
+    handleBringForward,
+    handleSendBackward,
+  ]);
 
   const handleNewDocument = useCallback(() => {
     // Navigate to projects list to create a new project
@@ -831,6 +982,10 @@ export function EditorPage() {
         onFitToScreen={handleFitToScreen}
         onToggleTimeline={() => setShowTimeline((v) => !v)}
         onToggleProperties={() => setShowProperties((v) => !v)}
+        onBringToFront={handleBringToFront}
+        onSendToBack={handleSendToBack}
+        onBringForward={handleBringForward}
+        onSendBackward={handleSendBackward}
       />
 
       {/* Main editor area */}
@@ -841,14 +996,17 @@ export function EditorPage() {
         {/* Stage / Canvas (center) */}
         <div
           ref={containerRef}
-          className="relative flex flex-1 items-center justify-center overflow-hidden bg-gray-950"
+          className="relative flex flex-1 overflow-hidden"
         >
-          <CanvasSurface
+          <CanvasViewport
             stage={stageRef.current}
-            width={scene.width}
-            height={scene.height}
+            sceneWidth={scene.width}
+            sceneHeight={scene.height}
+            sceneBackground={scene.background || "#ffffff"}
             selectedObjectId={selectedObjectId}
             activeTool={activeTool}
+            spaceHeld={spaceHeld}
+            containerRef={containerRef}
             onMouseMove={throttledSendCursor}
             onObjectClick={handleObjectClick}
             onDoubleClick={handleCanvasDoubleClick}
@@ -856,11 +1014,6 @@ export function EditorPage() {
             onDragMove={handleDragMove}
             onDragEnd={handleDragEnd}
             onCreateObject={handleCreateObject}
-          />
-          <CursorOverlay
-            canvasWidth={scene.width}
-            canvasHeight={scene.height}
-            containerRef={containerRef}
           />
         </div>
 
@@ -894,6 +1047,7 @@ export function EditorPage() {
           onNavigateBreadcrumb={handleNavigateBreadcrumb}
           onAddKeyframe={handleAddKeyframe}
           onDeleteKeyframe={handleDeleteKeyframe}
+          onMoveKeyframe={handleMoveKeyframe}
         />
       )}
     </div>

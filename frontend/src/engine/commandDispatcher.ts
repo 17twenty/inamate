@@ -22,6 +22,8 @@ import type {
   ReparentObjectOp,
   SetVisibilityOp,
   SetLockedOp,
+  CreateTrackOp,
+  DeleteTrackOp,
   UpdateSceneOp,
   AddKeyframeOp,
   UpdateKeyframeOp,
@@ -320,6 +322,22 @@ class CommandDispatcher {
         break;
       }
 
+      case "track.create": {
+        // No previous state needed for create - inverse is delete
+        return op;
+      }
+
+      case "track.delete": {
+        const track = doc.tracks[op.trackId];
+        if (track) {
+          return {
+            ...op,
+            previous: { ...track },
+          } as DeleteTrackOp;
+        }
+        break;
+      }
+
       case "keyframe.add": {
         // No previous state needed for add - inverse is delete
         return op;
@@ -445,6 +463,32 @@ class CommandDispatcher {
           changes: op.previous,
           previous: op.changes,
         };
+      }
+
+      case "track.create": {
+        // Inverse of create is delete
+        return {
+          id: crypto.randomUUID(),
+          type: "track.delete",
+          timestamp: Date.now(),
+          clientSeq: 0,
+          trackId: op.track.id,
+          timelineId: op.timelineId,
+          previous: op.track,
+        } as DeleteTrackOp;
+      }
+
+      case "track.delete": {
+        if (!op.previous) return null;
+        // Inverse of delete is create
+        return {
+          id: crypto.randomUUID(),
+          type: "track.create",
+          timestamp: Date.now(),
+          clientSeq: 0,
+          track: op.previous,
+          timelineId: op.timelineId,
+        } as CreateTrackOp;
       }
 
       case "keyframe.add": {
@@ -644,6 +688,59 @@ class CommandDispatcher {
         break;
       }
 
+      case "track.create": {
+        const timeline = doc.timelines[op.timelineId];
+        if (!timeline) return;
+
+        // Add track to tracks map
+        const newTracks = {
+          ...doc.tracks,
+          [op.track.id]: {
+            id: op.track.id,
+            objectId: op.track.objectId,
+            property: op.track.property,
+            keys: op.track.keys || [],
+          },
+        };
+
+        // Add track ID to timeline's tracks array
+        store.setDocument({
+          ...doc,
+          tracks: newTracks,
+          timelines: {
+            ...doc.timelines,
+            [op.timelineId]: {
+              ...timeline,
+              tracks: [...timeline.tracks, op.track.id],
+            },
+          },
+        });
+        break;
+      }
+
+      case "track.delete": {
+        const timeline = doc.timelines[op.timelineId];
+        if (!timeline) return;
+
+        // Remove track from tracks map
+        const newTracks = { ...doc.tracks };
+        delete newTracks[op.trackId];
+
+        // Remove track ID from timeline's tracks array
+        store.setDocument({
+          ...doc,
+          tracks: newTracks,
+          timelines: {
+            ...doc.timelines,
+            [op.timelineId]: {
+              ...timeline,
+              tracks: timeline.tracks.filter((t) => t !== op.trackId),
+            },
+          },
+        });
+        break;
+      }
+
       case "keyframe.add": {
         const newKeyframes = { ...doc.keyframes };
         newKeyframes[op.keyframe.id] = op.keyframe;
@@ -679,13 +776,47 @@ class CommandDispatcher {
       case "keyframe.update": {
         const keyframe = doc.keyframes[op.keyframeId];
         if (!keyframe) return;
-        store.setDocument({
-          ...doc,
-          keyframes: {
-            ...doc.keyframes,
-            [op.keyframeId]: { ...keyframe, ...op.changes },
-          },
-        });
+
+        const updatedKeyframe = { ...keyframe, ...op.changes };
+        const newKeyframes = {
+          ...doc.keyframes,
+          [op.keyframeId]: updatedKeyframe,
+        };
+
+        // If frame changed and trackId provided, re-sort the track's keys
+        if (op.changes.frame !== undefined && op.trackId) {
+          const track = doc.tracks[op.trackId];
+          if (track) {
+            // Remove keyframe from current position
+            const keysWithoutThis = track.keys.filter(
+              (k) => k !== op.keyframeId,
+            );
+
+            // Re-insert at correct sorted position
+            let insertIdx = keysWithoutThis.length;
+            for (let i = 0; i < keysWithoutThis.length; i++) {
+              const existingKey = newKeyframes[keysWithoutThis[i]];
+              if (existingKey && existingKey.frame > updatedKeyframe.frame) {
+                insertIdx = i;
+                break;
+              }
+            }
+            const newKeys = [...keysWithoutThis];
+            newKeys.splice(insertIdx, 0, op.keyframeId);
+
+            store.setDocument({
+              ...doc,
+              keyframes: newKeyframes,
+              tracks: {
+                ...doc.tracks,
+                [op.trackId]: { ...track, keys: newKeys },
+              },
+            });
+            break;
+          }
+        }
+
+        store.setDocument({ ...doc, keyframes: newKeyframes });
         break;
       }
 

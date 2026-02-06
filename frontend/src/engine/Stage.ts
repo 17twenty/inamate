@@ -208,7 +208,6 @@ export class Stage {
       (c) => c.objectId === this.selectedObjectId,
     );
     if (!cmd) return null;
-
     return hitTestHandle(x, y, cmd);
   }
 

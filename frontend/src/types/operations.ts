@@ -67,6 +67,31 @@ export interface SetLockedOp extends BaseOperation {
   previous?: boolean; // For undo
 }
 
+// --- Track Operations ---
+
+export interface CreateTrackOp extends BaseOperation {
+  type: "track.create";
+  track: {
+    id: string;
+    objectId: string;
+    property: string;
+    keys: string[];
+  };
+  timelineId: string;
+}
+
+export interface DeleteTrackOp extends BaseOperation {
+  type: "track.delete";
+  trackId: string;
+  timelineId: string;
+  previous?: {
+    id: string;
+    objectId: string;
+    property: string;
+    keys: string[];
+  };
+}
+
 // --- Keyframe Operations ---
 
 export interface AddKeyframeOp extends BaseOperation {
@@ -78,6 +103,7 @@ export interface AddKeyframeOp extends BaseOperation {
 export interface UpdateKeyframeOp extends BaseOperation {
   type: "keyframe.update";
   keyframeId: string;
+  trackId?: string; // Optional, needed when frame changes for re-sorting
   changes: Partial<Keyframe>;
   previous?: Partial<Keyframe>; // For undo
 }
@@ -125,6 +151,8 @@ export type Operation =
   | ReparentObjectOp
   | SetVisibilityOp
   | SetLockedOp
+  | CreateTrackOp
+  | DeleteTrackOp
   | AddKeyframeOp
   | UpdateKeyframeOp
   | DeleteKeyframeOp

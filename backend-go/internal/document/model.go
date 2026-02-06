@@ -110,6 +110,17 @@ type Asset struct {
 	Meta json.RawMessage `json:"meta"`
 }
 
+// NewSampleDocument creates a sample document for testing/WASM
+func NewSampleDocument(projectID string) *InDocument {
+	return NewEmptyDocument(
+		projectID,
+		"Sample Project",
+		"scene_sample",
+		"root_sample",
+		"timeline_sample",
+	)
+}
+
 // NewEmptyDocument creates an empty document for a new project
 func NewEmptyDocument(projectID, projectName, sceneID, rootID, timelineID string) *InDocument {
 	return &InDocument{
