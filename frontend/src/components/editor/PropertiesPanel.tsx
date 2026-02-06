@@ -3,6 +3,7 @@ import type { ObjectNode, Scene, Transform, Style } from "../../types/document";
 
 interface PropertiesPanelProps {
   selectedObject: ObjectNode | null;
+  selectedCount?: number;
   scene: Scene | null;
   onSceneUpdate?: (changes: Partial<Scene>) => void;
   onObjectUpdate?: (
@@ -13,10 +14,25 @@ interface PropertiesPanelProps {
 
 export function PropertiesPanel({
   selectedObject,
+  selectedCount = 0,
   scene,
   onSceneUpdate,
   onObjectUpdate,
 }: PropertiesPanelProps) {
+  // Show multi-select summary when multiple objects are selected
+  if (!selectedObject && selectedCount > 1) {
+    return (
+      <div className="w-56 border-l border-gray-800 bg-gray-900 p-3">
+        <h3 className="mb-2 text-xs font-semibold uppercase tracking-wider text-gray-500">
+          Properties
+        </h3>
+        <p className="text-xs text-gray-400">
+          {selectedCount} objects selected
+        </p>
+      </div>
+    );
+  }
+
   // Show scene properties when nothing is selected
   if (!selectedObject) {
     if (!scene) {

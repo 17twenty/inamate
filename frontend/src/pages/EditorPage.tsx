@@ -59,7 +59,7 @@ export function EditorPage() {
 
   // Editor UI state
   const [activeTool, setActiveTool] = useState<Tool>("select");
-  const [selectedObjectId, setSelectedObjectId] = useState<string | null>(null);
+  const [selectedObjectIds, setSelectedObjectIds] = useState<string[]>([]);
   const [currentFrame, setCurrentFrame] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
   const [showTimeline, setShowTimeline] = useState(true);
@@ -75,6 +75,10 @@ export function EditorPage() {
   // Editing context stack for nested Symbol editing
   const [editingStack, setEditingStack] = useState<EditingContext[]>([]);
 
+  // Derived convenience for single-selection cases
+  const singleSelectedId =
+    selectedObjectIds.length === 1 ? selectedObjectIds[0] : null;
+
   // Active scene (for multi-scene support)
   const [activeSceneId, setActiveSceneId] = useState<string | null>(null);
 
@@ -84,17 +88,16 @@ export function EditorPage() {
 
   // Drag state
   const dragRef = useRef<{
-    objectId: string;
+    objectIds: string[];
     dragType: DragType;
     startX: number;
     startY: number;
-    // Original transform values
-    origX: number;
-    origY: number;
-    origSx: number;
-    origSy: number;
-    origR: number;
-    // Bounds at drag start (for scale/rotate calculations)
+    // Original transforms for all dragged objects (for multi-move)
+    origTransforms: Map<
+      string,
+      { x: number; y: number; sx: number; sy: number; r: number }
+    >;
+    // Bounds at drag start (for scale/rotate calculations, single object only)
     bounds: Bounds | null;
     // Original object dimensions (for scale calculations)
     origWidth: number;
@@ -291,8 +294,8 @@ export function EditorPage() {
 
   // Sync selection to Stage (so it renders the outline imperatively)
   useEffect(() => {
-    stageRef.current.setSelectedObjectId(selectedObjectId);
-  }, [selectedObjectId]);
+    stageRef.current.setSelectedObjectIds(selectedObjectIds);
+  }, [selectedObjectIds]);
 
   // Cursor presence send
   const sendCursor = useCallback(
@@ -335,14 +338,14 @@ export function EditorPage() {
         ...prev,
         { objectId, timelineId: symbolData.timelineId },
       ]);
-      setSelectedObjectId(null);
+      setSelectedObjectIds([]);
     },
     [doc],
   );
 
   const handleNavigateBreadcrumb = useCallback((index: number) => {
     setEditingStack((prev) => prev.slice(0, index + 1));
-    setSelectedObjectId(null);
+    setSelectedObjectIds([]);
   }, []);
 
   const breadcrumb: BreadcrumbEntry[] = useMemo(() => {
@@ -358,9 +361,50 @@ export function EditorPage() {
 
   // --- Canvas interaction callbacks ---
 
-  const handleObjectClick = useCallback((objectId: string | null) => {
-    setSelectedObjectId(objectId);
-  }, []);
+  const handleObjectClick = useCallback(
+    (objectId: string | null, shiftKey: boolean) => {
+      if (objectId === null) {
+        setSelectedObjectIds([]);
+        return;
+      }
+      if (shiftKey) {
+        // Toggle in/out of selection
+        setSelectedObjectIds((prev) =>
+          prev.includes(objectId)
+            ? prev.filter((id) => id !== objectId)
+            : [...prev, objectId],
+        );
+      } else {
+        setSelectedObjectIds([objectId]);
+      }
+    },
+    [],
+  );
+
+  const handleMarqueeSelect = useCallback(
+    (rect: { minX: number; minY: number; maxX: number; maxY: number }) => {
+      if (!doc || !scene) return;
+      const root = doc.objects[scene.root];
+      if (!root) return;
+
+      const selected: string[] = [];
+      for (const childId of root.children) {
+        const bounds = stageRef.current.getObjectWorldBounds(childId);
+        if (!bounds) continue;
+        // AABB intersection test
+        if (
+          bounds.minX <= rect.maxX &&
+          bounds.maxX >= rect.minX &&
+          bounds.minY <= rect.maxY &&
+          bounds.maxY >= rect.minY
+        ) {
+          selected.push(childId);
+        }
+      }
+      setSelectedObjectIds(selected);
+    },
+    [doc, scene],
+  );
 
   const handleCanvasDoubleClick = useCallback(
     (objectId: string) => {
@@ -382,8 +426,27 @@ export function EditorPage() {
       bounds: Bounds | null,
     ) => {
       if (!doc) return;
-      const obj = doc.objects[objectId];
-      if (!obj) return;
+
+      // For move, drag all selected objects; for scale/rotate, only the single object
+      const objectIds =
+        dragType === "move" ? [...selectedObjectIds] : [objectId];
+
+      const origTransforms = new Map<
+        string,
+        { x: number; y: number; sx: number; sy: number; r: number }
+      >();
+      for (const id of objectIds) {
+        const obj = doc.objects[id];
+        if (obj) {
+          origTransforms.set(id, {
+            x: obj.transform.x,
+            y: obj.transform.y,
+            sx: obj.transform.sx,
+            sy: obj.transform.sy,
+            r: obj.transform.r,
+          });
+        }
+      }
 
       // Calculate original dimensions from bounds
       let origWidth = 0;
@@ -394,44 +457,58 @@ export function EditorPage() {
       }
 
       dragRef.current = {
-        objectId,
+        objectIds,
         dragType,
         startX: x,
         startY: y,
-        origX: obj.transform.x,
-        origY: obj.transform.y,
-        origSx: obj.transform.sx,
-        origSy: obj.transform.sy,
-        origR: obj.transform.r,
+        origTransforms,
         bounds,
         origWidth,
         origHeight,
       };
     },
-    [doc],
+    [doc, selectedObjectIds],
   );
 
   const handleDragMove = useCallback((x: number, y: number) => {
     const drag = dragRef.current;
     if (!drag) return;
 
-    // During drag: apply directly to store for visual feedback (no undo tracking)
-    // This is an optimistic visual update - the real operation is dispatched on drag end
     const store = useEditorStore.getState();
     const currentDoc = store.document;
     if (!currentDoc) return;
-    const obj = currentDoc.objects[drag.objectId];
+
+    if (drag.dragType === "move") {
+      // Multi-move: apply delta to all dragged objects
+      const dx = x - drag.startX;
+      const dy = y - drag.startY;
+      const newObjects = { ...currentDoc.objects };
+      for (const id of drag.objectIds) {
+        const orig = drag.origTransforms.get(id);
+        const obj = newObjects[id];
+        if (orig && obj) {
+          newObjects[id] = {
+            ...obj,
+            transform: { ...obj.transform, x: orig.x + dx, y: orig.y + dy },
+          };
+        }
+      }
+      store.setDocument({ ...currentDoc, objects: newObjects });
+      stageRef.current.invalidate();
+      return;
+    }
+
+    // Scale/rotate: single object only
+    const singleId = drag.objectIds[0];
+    if (!singleId) return;
+    const obj = currentDoc.objects[singleId];
     if (!obj) return;
+    const orig = drag.origTransforms.get(singleId);
+    if (!orig) return;
 
     let newTransform = { ...obj.transform };
 
-    if (drag.dragType === "move") {
-      // Simple move
-      const dx = x - drag.startX;
-      const dy = y - drag.startY;
-      newTransform.x = drag.origX + dx;
-      newTransform.y = drag.origY + dy;
-    } else if (drag.dragType === "rotate") {
+    if (drag.dragType === "rotate") {
       // Rotation around object center
       if (drag.bounds) {
         const centerX = (drag.bounds.minX + drag.bounds.maxX) / 2;
@@ -446,7 +523,7 @@ export function EditorPage() {
         const deltaAngle = currentAngle - startAngle;
 
         // Convert to degrees and add to original rotation
-        newTransform.r = drag.origR + (deltaAngle * 180) / Math.PI;
+        newTransform.r = orig.r + (deltaAngle * 180) / Math.PI;
       }
     } else if (drag.dragType && drag.dragType.startsWith("scale-")) {
       // Scale from corner handle
@@ -468,8 +545,8 @@ export function EditorPage() {
 
           if (startDist > 0) {
             const scaleFactor = currentDist / startDist;
-            newTransform.sx = drag.origSx * scaleFactor;
-            newTransform.sy = drag.origSy * scaleFactor;
+            newTransform.sx = orig.sx * scaleFactor;
+            newTransform.sy = orig.sy * scaleFactor;
           }
         } else {
           // No shift: scale from opposite corner
@@ -497,8 +574,8 @@ export function EditorPage() {
           const ratioX = Math.abs(origDistX) > 1 ? curDistX / origDistX : 1;
           const ratioY = Math.abs(origDistY) > 1 ? curDistY / origDistY : 1;
 
-          const newSx = drag.origSx * Math.max(0.01, ratioX);
-          const newSy = drag.origSy * Math.max(0.01, ratioY);
+          const newSx = orig.sx * Math.max(0.01, ratioX);
+          const newSy = orig.sy * Math.max(0.01, ratioY);
 
           newTransform.sx = newSx;
           newTransform.sy = newSy;
@@ -515,8 +592,8 @@ export function EditorPage() {
           // Set fixedX_new = fixedX:
           //   newX = fixedX - (fixedLocalX - ax) * newSx
           //        = fixedX - ((fixedX - origX) / origSx) * newSx
-          const offsetX = (fixedX - drag.origX) / drag.origSx;
-          const offsetY = (fixedY - drag.origY) / drag.origSy;
+          const offsetX = (fixedX - orig.x) / orig.sx;
+          const offsetY = (fixedY - orig.y) / orig.sy;
           newTransform.x = fixedX - offsetX * newSx;
           newTransform.y = fixedY - offsetY * newSy;
         }
@@ -527,7 +604,7 @@ export function EditorPage() {
       ...currentDoc,
       objects: {
         ...currentDoc.objects,
-        [drag.objectId]: {
+        [singleId]: {
           ...obj,
           transform: newTransform,
         },
@@ -542,74 +619,106 @@ export function EditorPage() {
     const drag = dragRef.current;
     if (!drag) return;
 
-    // Get current transform after drag
     const currentDoc = useEditorStore.getState().document;
     if (!currentDoc) {
       dragRef.current = null;
       return;
     }
-    const obj = currentDoc.objects[drag.objectId];
-    if (!obj) {
-      dragRef.current = null;
-      return;
-    }
 
-    const finalTransform = obj.transform;
-
-    // Check if any transform values changed
-    const hasChanged =
-      finalTransform.x !== drag.origX ||
-      finalTransform.y !== drag.origY ||
-      finalTransform.sx !== drag.origSx ||
-      finalTransform.sy !== drag.origSy ||
-      finalTransform.r !== drag.origR;
-
-    if (hasChanged) {
-      // Reset to original transform first (so the operation captures correct previous state)
-      useEditorStore.getState().setDocument({
-        ...currentDoc,
-        objects: {
-          ...currentDoc.objects,
-          [drag.objectId]: {
-            ...obj,
-            transform: {
-              ...obj.transform,
-              x: drag.origX,
-              y: drag.origY,
-              sx: drag.origSx,
-              sy: drag.origSy,
-              r: drag.origR,
-            },
-          },
-        },
-      });
-
-      // Build the transform changes based on what was dragged
-      const transformChanges: Record<string, number> = {};
-
-      if (drag.dragType === "move") {
-        transformChanges.x = finalTransform.x;
-        transformChanges.y = finalTransform.y;
-      } else if (drag.dragType === "rotate") {
-        transformChanges.r = finalTransform.r;
-      } else if (drag.dragType && drag.dragType.startsWith("scale-")) {
-        transformChanges.sx = finalTransform.sx;
-        transformChanges.sy = finalTransform.sy;
-        // Also include position if it changed (for anchor-based scaling)
-        if (finalTransform.x !== drag.origX) {
-          transformChanges.x = finalTransform.x;
-        }
-        if (finalTransform.y !== drag.origY) {
-          transformChanges.y = finalTransform.y;
+    if (drag.dragType === "move") {
+      // Multi-move: collect final transforms, reset all, then dispatch
+      const finals = new Map<string, { x: number; y: number }>();
+      for (const id of drag.objectIds) {
+        const obj = currentDoc.objects[id];
+        const orig = drag.origTransforms.get(id);
+        if (
+          obj &&
+          orig &&
+          (obj.transform.x !== orig.x || obj.transform.y !== orig.y)
+        ) {
+          finals.set(id, { x: obj.transform.x, y: obj.transform.y });
         }
       }
 
-      // Now dispatch the operation (this will apply the change and track for undo)
-      commandDispatcher.dispatch({
-        type: "object.transform",
-        objectId: drag.objectId,
-        transform: transformChanges,
-      });
+      if (finals.size > 0) {
+        // Reset all to originals in one setDocument
+        const resetObjects = { ...currentDoc.objects };
+        for (const [id, orig] of drag.origTransforms) {
+          const obj = resetObjects[id];
+          if (obj) {
+            resetObjects[id] = {
+              ...obj,
+              transform: { ...obj.transform, x: orig.x, y: orig.y },
+            };
+          }
+        }
+        useEditorStore
+          .getState()
+          .setDocument({ ...currentDoc, objects: resetObjects });
+
+        // Dispatch individual transform ops
+        for (const [id, final] of finals) {
+          commandDispatcher.dispatch({
+            type: "object.transform",
+            objectId: id,
+            transform: { x: final.x, y: final.y },
+          });
+        }
+      }
+    } else {
+      // Scale/rotate: single object
+      const singleId = drag.objectIds[0];
+      const obj = currentDoc.objects[singleId];
+      const orig = drag.origTransforms.get(singleId);
+      if (!obj || !orig) {
+        dragRef.current = null;
+        return;
+      }
+
+      const ft = obj.transform;
+      const hasChanged =
+        ft.x !== orig.x ||
+        ft.y !== orig.y ||
+        ft.sx !== orig.sx ||
+        ft.sy !== orig.sy ||
+        ft.r !== orig.r;
+
+      if (hasChanged) {
+        // Reset to original
+        useEditorStore.getState().setDocument({
+          ...currentDoc,
+          objects: {
+            ...currentDoc.objects,
+            [singleId]: {
+              ...obj,
+              transform: {
+                ...obj.transform,
+                x: orig.x,
+                y: orig.y,
+                sx: orig.sx,
+                sy: orig.sy,
+                r: orig.r,
+              },
+            },
+          },
+        });
+
+        const transformChanges: Record<string, number> = {};
+        if (drag.dragType === "rotate") {
+          transformChanges.r = ft.r;
+        } else if (drag.dragType && drag.dragType.startsWith("scale-")) {
+          transformChanges.sx = ft.sx;
+          transformChanges.sy = ft.sy;
+          if (ft.x !== orig.x) transformChanges.x = ft.x;
+          if (ft.y !== orig.y) transformChanges.y = ft.y;
+        }
+
+        commandDispatcher.dispatch({
+          type: "object.transform",
+          objectId: singleId,
+          transform: transformChanges,
+        });
+      }
     }
 
     dragRef.current = null;
@@ -628,25 +737,147 @@ export function EditorPage() {
   // --- Menu bar actions ---
 
   const handleDeleteObject = useCallback(() => {
-    if (!selectedObjectId) return;
-    commandDispatcher.dispatch({
-      type: "object.delete",
-      objectId: selectedObjectId,
-    });
-    setSelectedObjectId(null);
-  }, [selectedObjectId]);
+    if (selectedObjectIds.length === 0) return;
+    for (const id of selectedObjectIds) {
+      commandDispatcher.dispatch({
+        type: "object.delete",
+        objectId: id,
+      });
+    }
+    setSelectedObjectIds([]);
+  }, [selectedObjectIds]);
 
   const handleSelectAll = useCallback(() => {
     if (!doc || !scene) return;
     const root = doc.objects[scene.root];
     if (root && root.children.length > 0) {
-      setSelectedObjectId(root.children[0]);
+      setSelectedObjectIds([...root.children]);
     }
   }, [doc, scene]);
 
   const handleDeselect = useCallback(() => {
-    setSelectedObjectId(null);
+    setSelectedObjectIds([]);
   }, []);
+
+  // --- Group / Ungroup ---
+
+  const handleGroupSelection = useCallback(() => {
+    if (!doc || !scene || selectedObjectIds.length < 2) return;
+    const root = doc.objects[scene.root];
+    if (!root) return;
+
+    // Sort selected objects by their index in the parent's children array
+    const sorted = [...selectedObjectIds].sort(
+      (a, b) => root.children.indexOf(a) - root.children.indexOf(b),
+    );
+
+    // Compute combined bounds to determine group position
+    let minX = Infinity,
+      minY = Infinity;
+    for (const id of sorted) {
+      const obj = doc.objects[id];
+      if (obj) {
+        minX = Math.min(minX, obj.transform.x);
+        minY = Math.min(minY, obj.transform.y);
+      }
+    }
+    if (!isFinite(minX)) {
+      minX = 0;
+      minY = 0;
+    }
+
+    const groupId = crypto.randomUUID();
+    const insertIndex = root.children.indexOf(sorted[0]);
+
+    // Create the group object at the combined min corner
+    commandDispatcher.dispatch({
+      type: "object.create",
+      object: {
+        id: groupId,
+        type: "Group",
+        parent: scene.root,
+        children: [],
+        transform: { x: minX, y: minY, sx: 1, sy: 1, r: 0, ax: 0, ay: 0 },
+        style: { fill: "", stroke: "", strokeWidth: 0, opacity: 1 },
+        visible: true,
+        locked: false,
+        data: {},
+      },
+      parentId: scene.root,
+      index: insertIndex,
+    });
+
+    // Reparent each selected object into the group, adjusting position
+    for (let i = 0; i < sorted.length; i++) {
+      const id = sorted[i];
+      const obj = doc.objects[id];
+      if (!obj) continue;
+
+      // Offset position so it's relative to the group
+      commandDispatcher.dispatch({
+        type: "object.transform",
+        objectId: id,
+        transform: {
+          x: obj.transform.x - minX,
+          y: obj.transform.y - minY,
+        },
+      });
+
+      commandDispatcher.dispatch({
+        type: "object.reparent",
+        objectId: id,
+        newParentId: groupId,
+        newIndex: i,
+      });
+    }
+
+    setSelectedObjectIds([groupId]);
+  }, [doc, scene, selectedObjectIds]);
+
+  const handleUngroupSelection = useCallback(() => {
+    if (!doc || !scene || selectedObjectIds.length !== 1) return;
+    const groupId = selectedObjectIds[0];
+    const group = doc.objects[groupId];
+    if (!group || group.type !== "Group" || !group.parent) return;
+
+    const parent = doc.objects[group.parent];
+    if (!parent) return;
+
+    const groupIndex = parent.children.indexOf(groupId);
+    const children = [...group.children];
+
+    // Reparent each child back to the group's parent
+    for (let i = 0; i < children.length; i++) {
+      const childId = children[i];
+      const child = doc.objects[childId];
+      if (!child) continue;
+
+      // Add group's position to child so visual position is preserved
+      commandDispatcher.dispatch({
+        type: "object.transform",
+        objectId: childId,
+        transform: {
+          x: child.transform.x + group.transform.x,
+          y: child.transform.y + group.transform.y,
+        },
+      });
+
+      commandDispatcher.dispatch({
+        type: "object.reparent",
+        objectId: childId,
+        newParentId: group.parent,
+        newIndex: groupIndex + i,
+      });
+    }
+
+    // Delete the empty group
+    commandDispatcher.dispatch({
+      type: "object.delete",
+      objectId: groupId,
+    });
+
+    setSelectedObjectIds(children);
+  }, [doc, scene, selectedObjectIds]);
 
   const handleDeleteAll = useCallback(() => {
     if (!doc || !scene) return;
@@ -660,7 +891,7 @@ export function EditorPage() {
         objectId: childId,
       });
     }
-    setSelectedObjectId(null);
+    setSelectedObjectIds([]);
   }, [doc, scene]);
 
   // --- Properties panel handlers ---
@@ -729,7 +960,7 @@ export function EditorPage() {
 
     // Switch to new scene
     setActiveSceneId(sceneId);
-    setSelectedObjectId(null);
+    setSelectedObjectIds([]);
     setEditingStack([{ objectId: null, timelineId: doc.project.rootTimeline }]);
     stageRef.current.setScene(sceneId);
   }, [doc, scene]);
@@ -746,7 +977,7 @@ export function EditorPage() {
       const idx = doc.project.scenes.indexOf(sceneId);
       const nextId = doc.project.scenes[idx === 0 ? 1 : idx - 1];
       setActiveSceneId(nextId);
-      setSelectedObjectId(null);
+      setSelectedObjectIds([]);
       setEditingStack([
         { objectId: null, timelineId: doc.project.rootTimeline },
       ]);
@@ -759,7 +990,7 @@ export function EditorPage() {
     (sceneId: string) => {
       if (!doc) return;
       setActiveSceneId(sceneId);
-      setSelectedObjectId(null);
+      setSelectedObjectIds([]);
       setEditingStack([
         { objectId: null, timelineId: doc.project.rootTimeline },
       ]);
@@ -851,7 +1082,7 @@ export function EditorPage() {
       });
 
       // Auto-select the new object and switch to select tool
-      setSelectedObjectId(objectId);
+      setSelectedObjectIds([objectId]);
       setActiveTool("select");
     },
     [doc, scene],
@@ -959,7 +1190,7 @@ export function EditorPage() {
       });
 
       // Auto-select the new object and switch to select tool
-      setSelectedObjectId(objectId);
+      setSelectedObjectIds([objectId]);
       setActiveTool("select");
     },
     [doc, scene],
@@ -1044,7 +1275,7 @@ export function EditorPage() {
         asset,
       });
 
-      setSelectedObjectId(objectId);
+      setSelectedObjectIds([objectId]);
       setActiveTool("select");
     },
     [doc, scene],
@@ -1108,7 +1339,7 @@ export function EditorPage() {
 
   // Helper to get property value from object
   const getPropertyValue = useCallback(
-    (obj: ObjectNode, property: string): number => {
+    (obj: ObjectNode, property: string): number | string => {
       switch (property) {
         case "transform.x":
           return obj.transform.x;
@@ -1122,6 +1353,12 @@ export function EditorPage() {
           return obj.transform.r;
         case "style.opacity":
           return obj.style.opacity;
+        case "style.fill":
+          return obj.style.fill;
+        case "style.stroke":
+          return obj.style.stroke;
+        case "style.strokeWidth":
+          return obj.style.strokeWidth;
         default:
           return 0;
       }
@@ -1271,72 +1508,72 @@ export function EditorPage() {
   // --- Z-Order handlers ---
 
   const handleBringToFront = useCallback(() => {
-    if (!selectedObjectId || !doc) return;
-    const obj = doc.objects[selectedObjectId];
+    if (!singleSelectedId || !doc) return;
+    const obj = doc.objects[singleSelectedId];
     if (!obj?.parent) return;
     const parent = doc.objects[obj.parent];
     if (!parent) return;
-    const currentIndex = parent.children.indexOf(selectedObjectId);
-    if (currentIndex === parent.children.length - 1) return; // Already at front
+    const currentIndex = parent.children.indexOf(singleSelectedId);
+    if (currentIndex === parent.children.length - 1) return;
 
     commandDispatcher.dispatch({
       type: "object.reparent",
-      objectId: selectedObjectId,
+      objectId: singleSelectedId,
       newParentId: obj.parent,
       newIndex: parent.children.length - 1,
     });
-  }, [selectedObjectId, doc]);
+  }, [singleSelectedId, doc]);
 
   const handleSendToBack = useCallback(() => {
-    if (!selectedObjectId || !doc) return;
-    const obj = doc.objects[selectedObjectId];
+    if (!singleSelectedId || !doc) return;
+    const obj = doc.objects[singleSelectedId];
     if (!obj?.parent) return;
     const parent = doc.objects[obj.parent];
     if (!parent) return;
-    const currentIndex = parent.children.indexOf(selectedObjectId);
-    if (currentIndex === 0) return; // Already at back
+    const currentIndex = parent.children.indexOf(singleSelectedId);
+    if (currentIndex === 0) return;
 
     commandDispatcher.dispatch({
       type: "object.reparent",
-      objectId: selectedObjectId,
+      objectId: singleSelectedId,
       newParentId: obj.parent,
       newIndex: 0,
     });
-  }, [selectedObjectId, doc]);
+  }, [singleSelectedId, doc]);
 
   const handleBringForward = useCallback(() => {
-    if (!selectedObjectId || !doc) return;
-    const obj = doc.objects[selectedObjectId];
+    if (!singleSelectedId || !doc) return;
+    const obj = doc.objects[singleSelectedId];
     if (!obj?.parent) return;
     const parent = doc.objects[obj.parent];
     if (!parent) return;
-    const currentIndex = parent.children.indexOf(selectedObjectId);
-    if (currentIndex >= parent.children.length - 1) return; // Already at front
+    const currentIndex = parent.children.indexOf(singleSelectedId);
+    if (currentIndex >= parent.children.length - 1) return;
 
     commandDispatcher.dispatch({
       type: "object.reparent",
-      objectId: selectedObjectId,
+      objectId: singleSelectedId,
       newParentId: obj.parent,
-      newIndex: currentIndex + 2, // +2 because removal shifts indices
+      newIndex: currentIndex + 2,
     });
-  }, [selectedObjectId, doc]);
+  }, [singleSelectedId, doc]);
 
   const handleSendBackward = useCallback(() => {
-    if (!selectedObjectId || !doc) return;
-    const obj = doc.objects[selectedObjectId];
+    if (!singleSelectedId || !doc) return;
+    const obj = doc.objects[singleSelectedId];
     if (!obj?.parent) return;
     const parent = doc.objects[obj.parent];
     if (!parent) return;
-    const currentIndex = parent.children.indexOf(selectedObjectId);
-    if (currentIndex <= 0) return; // Already at back
+    const currentIndex = parent.children.indexOf(singleSelectedId);
+    if (currentIndex <= 0) return;
 
     commandDispatcher.dispatch({
       type: "object.reparent",
-      objectId: selectedObjectId,
+      objectId: singleSelectedId,
       newParentId: obj.parent,
       newIndex: currentIndex - 1,
     });
-  }, [selectedObjectId, doc]);
+  }, [singleSelectedId, doc]);
 
   // Z-order keyboard shortcuts (separate useEffect since handlers defined above)
   useEffect(() => {
@@ -1369,6 +1606,23 @@ export function EditorPage() {
     handleSendBackward,
   ]);
 
+  // Group/Ungroup keyboard shortcuts
+  useEffect(() => {
+    const handleGroupKeys = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === "g") {
+        e.preventDefault();
+        if (e.shiftKey) {
+          handleUngroupSelection();
+        } else {
+          handleGroupSelection();
+        }
+      }
+    };
+
+    window.addEventListener("keydown", handleGroupKeys);
+    return () => window.removeEventListener("keydown", handleGroupKeys);
+  }, [handleGroupSelection, handleUngroupSelection]);
+
   // --- Toast helper ---
 
   const showToast = useCallback((message: string, duration = 2000) => {
@@ -1382,17 +1636,14 @@ export function EditorPage() {
     // Get fresh document state from store
     const freshDoc = useEditorStore.getState().document;
 
-    if (!selectedObjectId || !freshDoc || !currentContext) {
+    if (selectedObjectIds.length === 0 || !freshDoc || !currentContext) {
       showToast("Select an object to record keyframe");
       return;
     }
 
-    const obj = freshDoc.objects[selectedObjectId];
-    if (!obj) return;
-
     const frame = stageRef.current.getCurrentFrame();
 
-    // Record all numeric transform and style properties at current frame
+    // Record all animatable properties at current frame
     const propertiesToRecord = [
       "transform.x",
       "transform.y",
@@ -1400,15 +1651,21 @@ export function EditorPage() {
       "transform.sy",
       "transform.r",
       "style.opacity",
+      "style.fill",
+      "style.stroke",
+      "style.strokeWidth",
     ];
 
-    for (const property of propertiesToRecord) {
-      handleAddKeyframe(selectedObjectId, frame, property);
+    for (const objectId of selectedObjectIds) {
+      for (const property of propertiesToRecord) {
+        handleAddKeyframe(objectId, frame, property);
+      }
     }
 
-    // Show feedback
-    showToast(`Keyframe recorded at frame ${frame}`);
-  }, [selectedObjectId, currentContext, handleAddKeyframe, showToast]);
+    showToast(
+      `Keyframe recorded at frame ${frame} for ${selectedObjectIds.length} object(s)`,
+    );
+  }, [selectedObjectIds, currentContext, handleAddKeyframe, showToast]);
 
   // K shortcut for record keyframe
   useEffect(() => {
@@ -1465,8 +1722,8 @@ export function EditorPage() {
     if (!doc || !scene) return;
 
     // Temporarily clear selection so export doesn't show selection outline
-    const previousSelection = selectedObjectId;
-    stageRef.current.setSelectedObjectId(null);
+    const previousSelection = selectedObjectIds;
+    stageRef.current.setSelectedObjectIds([]);
     stageRef.current.invalidate();
 
     // Wait for next frame to ensure render completes without selection
@@ -1474,7 +1731,7 @@ export function EditorPage() {
       const canvas = containerRef.current?.querySelector("canvas");
       if (!canvas) {
         // Restore selection
-        stageRef.current.setSelectedObjectId(previousSelection);
+        stageRef.current.setSelectedObjectIds(previousSelection);
         return;
       }
 
@@ -1491,10 +1748,10 @@ export function EditorPage() {
       link.click();
 
       // Restore selection
-      stageRef.current.setSelectedObjectId(previousSelection);
+      stageRef.current.setSelectedObjectIds(previousSelection);
       stageRef.current.invalidate();
     });
-  }, [doc, scene, selectedObjectId, currentFrame]);
+  }, [doc, scene, selectedObjectIds, currentFrame]);
 
   const handleZoomIn = useCallback(() => {
     // Placeholder
@@ -1522,11 +1779,11 @@ export function EditorPage() {
     if (!canvas) return;
 
     // Store current state to restore after export
-    const previousSelection = selectedObjectId;
+    const previousSelection = selectedObjectIds;
     const previousFrame = currentFrame;
 
     // Clear selection for clean export
-    stageRef.current.setSelectedObjectId(null);
+    stageRef.current.setSelectedObjectIds([]);
 
     try {
       await exportPngSequence(
@@ -1542,15 +1799,15 @@ export function EditorPage() {
       // Restore previous state
       setExportProgress(null);
       stageRef.current.seek(previousFrame);
-      stageRef.current.setSelectedObjectId(previousSelection);
+      stageRef.current.setSelectedObjectIds(previousSelection);
       stageRef.current.invalidate();
     }
-  }, [doc, scene, selectedObjectId, currentFrame, totalFrames]);
+  }, [doc, scene, selectedObjectIds, currentFrame, totalFrames]);
 
   const selectedObject = useMemo(() => {
-    if (!doc || !selectedObjectId) return null;
-    return doc.objects[selectedObjectId] || null;
-  }, [doc, selectedObjectId]);
+    if (!doc || !singleSelectedId) return null;
+    return doc.objects[singleSelectedId] || null;
+  }, [doc, singleSelectedId]);
 
   // Show error UI if document failed to load
   if (loadError) {
@@ -1611,7 +1868,7 @@ export function EditorPage() {
       <MenuBar
         isLocalMode={false}
         projectName={doc.project.name}
-        selectedObjectId={selectedObjectId}
+        hasSelection={selectedObjectIds.length > 0}
         onDeleteObject={handleDeleteObject}
         onSelectAll={handleSelectAll}
         onDeselect={handleDeselect}
@@ -1629,6 +1886,13 @@ export function EditorPage() {
         onBringForward={handleBringForward}
         onSendBackward={handleSendBackward}
         onDeleteAll={handleDeleteAll}
+        onGroup={handleGroupSelection}
+        onUngroup={handleUngroupSelection}
+        canGroup={selectedObjectIds.length >= 2}
+        canUngroup={
+          selectedObjectIds.length === 1 &&
+          doc.objects[selectedObjectIds[0]]?.type === "Group"
+        }
       />
 
       {/* Main editor area */}
@@ -1646,7 +1910,7 @@ export function EditorPage() {
             sceneWidth={scene.width}
             sceneHeight={scene.height}
             sceneBackground={scene.background || "#ffffff"}
-            selectedObjectId={selectedObjectId}
+            selectedObjectIds={selectedObjectIds}
             activeTool={activeTool}
             spaceHeld={spaceHeld}
             containerRef={containerRef}
@@ -1658,6 +1922,7 @@ export function EditorPage() {
             onDragEnd={handleDragEnd}
             onCreateObject={handleCreateObject}
             onCreatePath={handleCreatePath}
+            onMarqueeSelect={handleMarqueeSelect}
           />
         </div>
 
@@ -1665,6 +1930,7 @@ export function EditorPage() {
         {showProperties && (
           <PropertiesPanel
             selectedObject={selectedObject}
+            selectedCount={selectedObjectIds.length}
             scene={scene}
             onSceneUpdate={handleSceneUpdate}
             onObjectUpdate={handleObjectUpdate}
@@ -1682,8 +1948,8 @@ export function EditorPage() {
           isPlaying={isPlaying}
           onFrameChange={handleFrameChange}
           onTogglePlay={togglePlay}
-          selectedObjectId={selectedObjectId}
-          onSelectObject={setSelectedObjectId}
+          selectedObjectIds={selectedObjectIds}
+          onSelectObject={setSelectedObjectIds}
           editingObjectId={currentContext.objectId}
           editingTimelineId={currentContext.timelineId}
           breadcrumb={breadcrumb}

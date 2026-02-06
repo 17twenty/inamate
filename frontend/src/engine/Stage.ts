@@ -31,7 +31,7 @@ export class Stage {
   private lastFrameTime = 0;
   private frameInterval = 1000 / 24;
 
-  private selectedObjectId: string | null = null;
+  private selectedObjectIds: string[] = [];
   private lastCommands: DrawCommand[] = [];
   private needsRender = true; // Dirty flag for paused re-render
 
@@ -177,19 +177,17 @@ export class Stage {
   }
 
   /**
-   * Set the selected object ID for rendering selection outline.
+   * Set the selected object IDs for rendering selection outlines.
    */
-  setSelectedObjectId(objectId: string | null): void {
-    this.selectedObjectId = objectId;
-    const selection = objectId ? [objectId] : [];
+  setSelectedObjectIds(objectIds: string[]): void {
+    this.selectedObjectIds = objectIds;
 
     if (!this.wasmReady) {
-      // Queue for later
-      this.pendingSelection = selection;
+      this.pendingSelection = objectIds;
       return;
     }
 
-    wasm.setSelection(selection);
+    wasm.setSelection(objectIds);
   }
 
   // --- Playback Controls ---
@@ -247,29 +245,38 @@ export class Stage {
 
   /**
    * Hit test for transform handles on the selected object.
-   * Returns the handle type if clicking a handle, null otherwise.
+   * Only works when exactly one object is selected.
    */
   hitTestHandle(x: number, y: number): HandleType {
-    if (!this.selectedObjectId) return null;
+    if (this.selectedObjectIds.length !== 1) return null;
 
     const cmd = this.lastCommands.find(
-      (c) => c.objectId === this.selectedObjectId,
+      (c) => c.objectId === this.selectedObjectIds[0],
     );
     if (!cmd) return null;
     return hitTestHandle(x, y, cmd);
   }
 
   /**
-   * Get the world bounds of the selected object.
+   * Get the world bounds of the selected object (single selection only).
    */
   getSelectedObjectBounds(): Bounds | null {
-    if (!this.selectedObjectId) return null;
+    if (this.selectedObjectIds.length !== 1) return null;
 
     const cmd = this.lastCommands.find(
-      (c) => c.objectId === this.selectedObjectId,
+      (c) => c.objectId === this.selectedObjectIds[0],
     );
     if (!cmd) return null;
 
+    return getWorldBounds(cmd);
+  }
+
+  /**
+   * Get world bounds for any object by ID (for marquee selection).
+   */
+  getObjectWorldBounds(objectId: string): Bounds | null {
+    const cmd = this.lastCommands.find((c) => c.objectId === objectId);
+    if (!cmd) return null;
     return getWorldBounds(cmd);
   }
 
@@ -373,13 +380,14 @@ export class Stage {
       this.assets,
     );
 
-    // Render selection outline if any
-    if (this.selectedObjectId) {
-      const selectedCmd = this.lastCommands.find(
-        (cmd) => cmd.objectId === this.selectedObjectId,
-      );
-      if (selectedCmd) {
-        renderSelectionOutline(this.ctx, selectedCmd);
+    // Render selection outlines
+    if (this.selectedObjectIds.length > 0) {
+      const showHandles = this.selectedObjectIds.length === 1;
+      for (const id of this.selectedObjectIds) {
+        const cmd = this.lastCommands.find((c) => c.objectId === id);
+        if (cmd) {
+          renderSelectionOutline(this.ctx, cmd, showHandles);
+        }
       }
     }
   }

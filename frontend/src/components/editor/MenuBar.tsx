@@ -20,7 +20,7 @@ type MenuEntry = MenuItem | MenuSeparator;
 interface MenuBarProps {
   isLocalMode: boolean;
   projectName: string;
-  selectedObjectId: string | null;
+  hasSelection: boolean;
   onDeleteObject: () => void;
   onSelectAll: () => void;
   onDeselect: () => void;
@@ -40,12 +40,17 @@ interface MenuBarProps {
   onSendBackward: () => void;
   // Delete all
   onDeleteAll: () => void;
+  // Group/Ungroup
+  onGroup?: () => void;
+  onUngroup?: () => void;
+  canGroup?: boolean;
+  canUngroup?: boolean;
 }
 
 export function MenuBar({
   isLocalMode,
   projectName,
-  selectedObjectId,
+  hasSelection,
   onDeleteObject,
   onSelectAll,
   onDeselect,
@@ -63,6 +68,10 @@ export function MenuBar({
   onBringForward,
   onSendBackward,
   onDeleteAll,
+  onGroup,
+  onUngroup,
+  canGroup,
+  canUngroup,
 }: MenuBarProps) {
   const [openMenu, setOpenMenu] = useState<string | null>(null);
   const barRef = useRef<HTMLDivElement>(null);
@@ -111,7 +120,7 @@ export function MenuBar({
           label: "Delete",
           shortcut: isMac() ? "Del" : "Delete",
           action: onDeleteObject,
-          disabled: !selectedObjectId,
+          disabled: !hasSelection,
         },
         {
           label: "Delete All",
@@ -126,28 +135,41 @@ export function MenuBar({
         { label: "Deselect", action: onDeselect },
         { separator: true },
         {
+          label: "Group",
+          shortcut: isMac() ? "Cmd+G" : "Ctrl+G",
+          action: onGroup,
+          disabled: !canGroup,
+        },
+        {
+          label: "Ungroup",
+          shortcut: isMac() ? "Cmd+Shift+G" : "Ctrl+Shift+G",
+          action: onUngroup,
+          disabled: !canUngroup,
+        },
+        { separator: true },
+        {
           label: "Bring to Front",
           shortcut: isMac() ? "Cmd+Shift+]" : "Ctrl+Shift+]",
           action: onBringToFront,
-          disabled: !selectedObjectId,
+          disabled: !hasSelection,
         },
         {
           label: "Bring Forward",
           shortcut: isMac() ? "Cmd+]" : "Ctrl+]",
           action: onBringForward,
-          disabled: !selectedObjectId,
+          disabled: !hasSelection,
         },
         {
           label: "Send Backward",
           shortcut: isMac() ? "Cmd+[" : "Ctrl+[",
           action: onSendBackward,
-          disabled: !selectedObjectId,
+          disabled: !hasSelection,
         },
         {
           label: "Send to Back",
           shortcut: isMac() ? "Cmd+Shift+[" : "Ctrl+Shift+[",
           action: onSendToBack,
-          disabled: !selectedObjectId,
+          disabled: !hasSelection,
         },
       ],
     },

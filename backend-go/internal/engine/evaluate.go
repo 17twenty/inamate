@@ -8,14 +8,26 @@ import (
 	"github.com/inamate/inamate/backend-go/internal/document"
 )
 
-// PropertyOverrides holds interpolated property values from keyframe evaluation.
+// PropertyOverrides holds interpolated numeric property values from keyframe evaluation.
 // Keys are property paths like "transform.x", "transform.r", "style.opacity".
 type PropertyOverrides map[string]float64
 
+// StringPropertyOverrides holds step-interpolated string property values (e.g. colors).
+type StringPropertyOverrides map[string]string
+
+// EvalResult contains both numeric and string property overrides per object.
+type EvalResult struct {
+	Numeric map[string]PropertyOverrides
+	Strings map[string]StringPropertyOverrides
+}
+
 // EvaluateTimeline evaluates all tracks in a timeline at the given frame.
-// Returns a map of objectId -> PropertyOverrides.
-func EvaluateTimeline(doc *document.InDocument, timelineID string, frame int) map[string]PropertyOverrides {
-	result := make(map[string]PropertyOverrides)
+// Returns numeric overrides (linearly interpolated) and string overrides (step/hold).
+func EvaluateTimeline(doc *document.InDocument, timelineID string, frame int) EvalResult {
+	result := EvalResult{
+		Numeric: make(map[string]PropertyOverrides),
+		Strings: make(map[string]StringPropertyOverrides),
+	}
 
 	timeline, ok := doc.Timelines[timelineID]
 	if !ok {
@@ -28,15 +40,24 @@ func EvaluateTimeline(doc *document.InDocument, timelineID string, frame int) ma
 			continue
 		}
 
+		// Try numeric interpolation first
 		value := interpolateTrack(doc, &track, frame)
-		if value == nil {
+		if value != nil {
+			if result.Numeric[track.ObjectID] == nil {
+				result.Numeric[track.ObjectID] = make(PropertyOverrides)
+			}
+			result.Numeric[track.ObjectID][track.Property] = *value
 			continue
 		}
 
-		if result[track.ObjectID] == nil {
-			result[track.ObjectID] = make(PropertyOverrides)
+		// Fall back to string step interpolation (for colors etc.)
+		strValue := interpolateStringTrack(doc, &track, frame)
+		if strValue != nil {
+			if result.Strings[track.ObjectID] == nil {
+				result.Strings[track.ObjectID] = make(StringPropertyOverrides)
+			}
+			result.Strings[track.ObjectID][track.Property] = *strValue
 		}
-		result[track.ObjectID][track.Property] = *value
 	}
 
 	return result
@@ -104,6 +125,53 @@ func interpolateTrack(doc *document.InDocument, track *document.Track, frame int
 	// Linear interpolation
 	result := *prevVal + (*nextVal-*prevVal)*t
 	return &result
+}
+
+// interpolateStringTrack evaluates a string track at the given frame using step/hold interpolation.
+// Returns the string value of the keyframe at or before the current frame.
+func interpolateStringTrack(doc *document.InDocument, track *document.Track, frame int) *string {
+	if len(track.Keys) == 0 {
+		return nil
+	}
+
+	keyframes := make([]document.Keyframe, 0, len(track.Keys))
+	for _, kfID := range track.Keys {
+		if kf, ok := doc.Keyframes[kfID]; ok {
+			keyframes = append(keyframes, kf)
+		}
+	}
+
+	if len(keyframes) == 0 {
+		return nil
+	}
+
+	sort.Slice(keyframes, func(i, j int) bool {
+		return keyframes[i].Frame < keyframes[j].Frame
+	})
+
+	// Find the keyframe at or before the current frame (step/hold)
+	var prev *document.Keyframe
+	for i := range keyframes {
+		if keyframes[i].Frame <= frame {
+			prev = &keyframes[i]
+		}
+	}
+
+	// Before first keyframe — use first value
+	if prev == nil {
+		return parseStringKeyframeValue(keyframes[0].Value)
+	}
+
+	return parseStringKeyframeValue(prev.Value)
+}
+
+// parseStringKeyframeValue extracts a string from a keyframe's JSON value.
+func parseStringKeyframeValue(raw json.RawMessage) *string {
+	var v string
+	if err := json.Unmarshal(raw, &v); err != nil {
+		return nil
+	}
+	return &v
 }
 
 // parseKeyframeValue extracts a float64 from a keyframe's JSON value.
@@ -176,6 +244,20 @@ func ApplyOverridesToStyle(base document.Style, overrides PropertyOverrides) doc
 	}
 	if v, ok := overrides["style.strokeWidth"]; ok {
 		result.StrokeWidth = v
+	}
+
+	return result
+}
+
+// ApplyStringOverridesToStyle applies string property overrides (fill, stroke) to a base style.
+func ApplyStringOverridesToStyle(base document.Style, overrides StringPropertyOverrides) document.Style {
+	result := base
+
+	if v, ok := overrides["style.fill"]; ok {
+		result.Fill = v
+	}
+	if v, ok := overrides["style.stroke"]; ok {
+		result.Stroke = v
 	}
 
 	return result

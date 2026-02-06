@@ -23,17 +23,11 @@ func BuildSceneGraph(doc *document.InDocument, sceneID string, frame int, rootTi
 		return sg
 	}
 
-	// Only evaluate timeline overrides when playing (preview mode)
-	// In edit mode, show the document's actual transform values
-	var overrides map[string]PropertyOverrides
-	if playing {
-		overrides = EvaluateTimeline(doc, rootTimelineID, frame)
-	} else {
-		overrides = make(map[string]PropertyOverrides)
-	}
+	// Always evaluate timeline overrides so scrubbing while paused shows animated values
+	evalResult := EvaluateTimeline(doc, rootTimelineID, frame)
 
 	// Build the tree starting from root
-	sg.Root = buildNode(doc, &rootObj, nil, Identity(), 1.0, overrides, frame, sg, playing)
+	sg.Root = buildNode(doc, &rootObj, nil, Identity(), 1.0, evalResult, frame, sg, playing)
 	sg.Dirty = false
 
 	return sg
@@ -46,7 +40,7 @@ func buildNode(
 	parent *SceneNode,
 	parentWorldTransform Matrix2D,
 	parentOpacity float64,
-	overrides map[string]PropertyOverrides,
+	eval EvalResult,
 	frame int,
 	sg *SceneGraph,
 	playing bool,
@@ -61,13 +55,21 @@ func buildNode(
 		symbolTimelineID := GetSymbolTimelineID(obj.Data)
 		if symbolTimelineID != "" {
 			// Evaluate the symbol's timeline and merge overrides
-			symbolOverrides := EvaluateTimeline(doc, symbolTimelineID, frame)
-			for objID, props := range symbolOverrides {
-				if overrides[objID] == nil {
-					overrides[objID] = make(PropertyOverrides)
+			symbolEval := EvaluateTimeline(doc, symbolTimelineID, frame)
+			for objID, props := range symbolEval.Numeric {
+				if eval.Numeric[objID] == nil {
+					eval.Numeric[objID] = make(PropertyOverrides)
 				}
 				for k, v := range props {
-					overrides[objID][k] = v
+					eval.Numeric[objID][k] = v
+				}
+			}
+			for objID, props := range symbolEval.Strings {
+				if eval.Strings[objID] == nil {
+					eval.Strings[objID] = make(StringPropertyOverrides)
+				}
+				for k, v := range props {
+					eval.Strings[objID][k] = v
 				}
 			}
 		}
@@ -76,9 +78,12 @@ func buildNode(
 	// Apply property overrides if any
 	transform := obj.Transform
 	style := obj.Style
-	if objOverrides, ok := overrides[obj.ID]; ok {
-		transform = ApplyOverridesToTransform(transform, objOverrides)
-		style = ApplyOverridesToStyle(style, objOverrides)
+	if numOverrides, ok := eval.Numeric[obj.ID]; ok {
+		transform = ApplyOverridesToTransform(transform, numOverrides)
+		style = ApplyOverridesToStyle(style, numOverrides)
+	}
+	if strOverrides, ok := eval.Strings[obj.ID]; ok {
+		style = ApplyStringOverridesToStyle(style, strOverrides)
 	}
 
 	// Compute local and world transforms
@@ -169,7 +174,7 @@ func buildNode(
 			continue
 		}
 
-		childNode := buildNode(doc, &childObj, node, worldMatrix, opacity, overrides, frame, sg, playing)
+		childNode := buildNode(doc, &childObj, node, worldMatrix, opacity, eval, frame, sg, playing)
 		if childNode != nil {
 			node.Children = append(node.Children, childNode)
 

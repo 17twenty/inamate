@@ -26,12 +26,12 @@ interface CanvasViewportProps {
   sceneWidth: number;
   sceneHeight: number;
   sceneBackground: string;
-  selectedObjectId: string | null;
+  selectedObjectIds: string[];
   activeTool: Tool;
   spaceHeld: boolean;
   containerRef: RefObject<HTMLDivElement | null>;
   onMouseMove?: (x: number, y: number) => void;
-  onObjectClick?: (objectId: string | null) => void;
+  onObjectClick?: (objectId: string | null, shiftKey: boolean) => void;
   onDoubleClick?: (objectId: string) => void;
   onDragStart?: (
     objectId: string,
@@ -45,6 +45,13 @@ interface CanvasViewportProps {
   onCreateObject?: (x: number, y: number, tool: Tool) => void;
   // Pen tool
   onCreatePath?: (commands: PathCommand[]) => void;
+  // Marquee selection
+  onMarqueeSelect?: (rect: {
+    minX: number;
+    minY: number;
+    maxX: number;
+    maxY: number;
+  }) => void;
 }
 
 const MIN_ZOOM = 0.1;
@@ -56,7 +63,7 @@ export function CanvasViewport({
   sceneWidth,
   sceneHeight,
   sceneBackground,
-  selectedObjectId,
+  selectedObjectIds,
   activeTool,
   spaceHeld,
   containerRef,
@@ -68,6 +75,7 @@ export function CanvasViewport({
   onDragEnd,
   onCreateObject,
   onCreatePath,
+  onMarqueeSelect,
 }: CanvasViewportProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const penOverlayRef = useRef<HTMLCanvasElement>(null);
@@ -86,6 +94,16 @@ export function CanvasViewport({
   const [penPoints, setPenPoints] = useState<PenPoint[]>([]);
   const [penPreviewPoint, setPenPreviewPoint] = useState<PenPoint | null>(null);
   const isDrawingPath = penPoints.length > 0;
+
+  // Marquee selection state
+  const isMarqueeRef = useRef(false);
+  const marqueeStartRef = useRef({ x: 0, y: 0 });
+  const [marqueeRect, setMarqueeRect] = useState<{
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+  } | null>(null);
 
   // Bezier handle drag state
   const pendingPointRef = useRef<PenPoint | null>(null);
@@ -337,14 +355,14 @@ export function CanvasViewport({
         return;
       }
 
-      // Check for handle hits first (on selected object)
-      if (selectedObjectId && onDragStart) {
+      // Check for handle hits first (only when single object selected)
+      if (selectedObjectIds.length === 1 && onDragStart) {
         const handleType = stage.hitTestHandle(x, y);
         if (handleType) {
           isDraggingRef.current = true;
           dragTypeRef.current = handleType;
           const bounds = stage.getSelectedObjectBounds();
-          onDragStart(selectedObjectId, x, y, handleType, bounds);
+          onDragStart(selectedObjectIds[0], x, y, handleType, bounds);
           return;
         }
       }
@@ -352,8 +370,13 @@ export function CanvasViewport({
       // Hit test for objects
       const hitId = stage.hitTest(x, y);
 
-      // If clicking the already-selected object, start move drag
-      if (hitId && hitId === selectedObjectId && onDragStart) {
+      // If clicking a selected object, start move drag (multi-move)
+      if (
+        hitId &&
+        selectedObjectIds.includes(hitId) &&
+        onDragStart &&
+        !e.shiftKey
+      ) {
         isDraggingRef.current = true;
         dragTypeRef.current = "move";
         const bounds = stage.getSelectedObjectBounds();
@@ -361,19 +384,34 @@ export function CanvasViewport({
         return;
       }
 
-      // Otherwise, select whatever was clicked (or null)
-      onObjectClick?.(hitId);
+      // If we hit an object, select it
+      if (hitId) {
+        onObjectClick?.(hitId, e.shiftKey);
+        return;
+      }
+
+      // Clicked empty space with select tool — start marquee
+      if (activeTool === "select" && onMarqueeSelect) {
+        isMarqueeRef.current = true;
+        marqueeStartRef.current = { x, y };
+        setMarqueeRect(null);
+        return;
+      }
+
+      // No hit, deselect
+      onObjectClick?.(null, e.shiftKey);
     },
     [
       activeTool,
       spaceHeld,
       pan,
       viewportToScene,
-      selectedObjectId,
+      selectedObjectIds,
       stage,
       onDragStart,
       onObjectClick,
       onCreateObject,
+      onMarqueeSelect,
     ],
   );
 
@@ -392,6 +430,19 @@ export function CanvasViewport({
       }
 
       const { x, y } = viewportToScene(e);
+
+      // Handle marquee dragging
+      if (isMarqueeRef.current) {
+        const sx = marqueeStartRef.current.x;
+        const sy = marqueeStartRef.current.y;
+        setMarqueeRect({
+          x: Math.min(sx, x),
+          y: Math.min(sy, y),
+          width: Math.abs(x - sx),
+          height: Math.abs(y - sy),
+        });
+        return;
+      }
 
       // Handle object dragging
       if (isDraggingRef.current && onDragMove) {
@@ -432,6 +483,26 @@ export function CanvasViewport({
       if (isPanningRef.current) {
         isPanningRef.current = false;
       }
+      if (isMarqueeRef.current) {
+        isMarqueeRef.current = false;
+        const { x, y } = viewportToScene(e);
+        const sx = marqueeStartRef.current.x;
+        const sy = marqueeStartRef.current.y;
+        const dist = Math.hypot(x - sx, y - sy);
+        if (dist > 3 && onMarqueeSelect) {
+          onMarqueeSelect({
+            minX: Math.min(sx, x),
+            minY: Math.min(sy, y),
+            maxX: Math.max(sx, x),
+            maxY: Math.max(sy, y),
+          });
+        } else {
+          // Tiny drag = click on empty space, deselect
+          onObjectClick?.(null, e.shiftKey);
+        }
+        setMarqueeRect(null);
+        return;
+      }
       if (isDraggingRef.current) {
         isDraggingRef.current = false;
         dragTypeRef.current = null;
@@ -464,13 +535,17 @@ export function CanvasViewport({
         setHandleDragPos(null);
       }
     },
-    [onDragEnd, viewportToScene],
+    [onDragEnd, viewportToScene, onMarqueeSelect, onObjectClick],
   );
 
   // Handle mouse leave
   const handleMouseLeave = useCallback(() => {
     if (isPanningRef.current) {
       isPanningRef.current = false;
+    }
+    if (isMarqueeRef.current) {
+      isMarqueeRef.current = false;
+      setMarqueeRect(null);
     }
     if (isDraggingRef.current) {
       isDraggingRef.current = false;
@@ -628,6 +703,29 @@ export function CanvasViewport({
             height: sceneHeight,
           }}
         />
+
+        {/* Marquee selection overlay */}
+        {marqueeRect && (
+          <svg
+            className="absolute inset-0 pointer-events-none"
+            style={{
+              width: sceneWidth,
+              height: sceneHeight,
+            }}
+            viewBox={`0 0 ${sceneWidth} ${sceneHeight}`}
+          >
+            <rect
+              x={marqueeRect.x}
+              y={marqueeRect.y}
+              width={marqueeRect.width}
+              height={marqueeRect.height}
+              fill="rgba(0,102,255,0.1)"
+              stroke="#0066ff"
+              strokeWidth={1}
+              strokeDasharray="4 4"
+            />
+          </svg>
+        )}
 
         {/* Pen tool drawing overlay */}
         {(isDrawingPath || penMouseDownRef.current) && (

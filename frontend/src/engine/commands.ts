@@ -357,6 +357,7 @@ export function getWorldBounds(cmd: DrawCommand): Bounds | null {
 export function renderSelectionOutline(
   ctx: CanvasRenderingContext2D,
   cmd: DrawCommand,
+  showHandles = true,
 ): void {
   if (!cmd.transform) return;
 
@@ -386,60 +387,62 @@ export function renderSelectionOutline(
   }
   ctx.restore();
 
-  // Draw handles in world space (axis-aligned)
-  ctx.save();
-  ctx.setLineDash([]);
+  // Draw handles in world space (axis-aligned) — only for single selection
+  if (showHandles) {
+    ctx.save();
+    ctx.setLineDash([]);
 
-  const handleSize = 8;
-  const { minX, minY, maxX, maxY } = worldBounds;
+    const handleSize = 8;
+    const { minX, minY, maxX, maxY } = worldBounds;
 
-  // Corner handles (white fill, blue stroke)
-  const corners = [
-    { x: minX, y: minY }, // NW
-    { x: maxX, y: minY }, // NE
-    { x: minX, y: maxY }, // SW
-    { x: maxX, y: maxY }, // SE
-  ];
+    // Corner handles (white fill, blue stroke)
+    const corners = [
+      { x: minX, y: minY }, // NW
+      { x: maxX, y: minY }, // NE
+      { x: minX, y: maxY }, // SW
+      { x: maxX, y: maxY }, // SE
+    ];
 
-  for (const corner of corners) {
-    ctx.fillStyle = "#ffffff";
+    for (const corner of corners) {
+      ctx.fillStyle = "#ffffff";
+      ctx.strokeStyle = "#0066ff";
+      ctx.lineWidth = 1.5;
+      ctx.fillRect(
+        corner.x - handleSize / 2,
+        corner.y - handleSize / 2,
+        handleSize,
+        handleSize,
+      );
+      ctx.strokeRect(
+        corner.x - handleSize / 2,
+        corner.y - handleSize / 2,
+        handleSize,
+        handleSize,
+      );
+    }
+
+    // Rotation handle (circle above center)
+    const centerX = (minX + maxX) / 2;
+    const rotateY = minY - 25;
+
+    // Line from top center to rotation handle
+    ctx.beginPath();
+    ctx.moveTo(centerX, minY);
+    ctx.lineTo(centerX, rotateY);
     ctx.strokeStyle = "#0066ff";
     ctx.lineWidth = 1.5;
-    ctx.fillRect(
-      corner.x - handleSize / 2,
-      corner.y - handleSize / 2,
-      handleSize,
-      handleSize,
-    );
-    ctx.strokeRect(
-      corner.x - handleSize / 2,
-      corner.y - handleSize / 2,
-      handleSize,
-      handleSize,
-    );
+    ctx.stroke();
+
+    // Rotation circle
+    ctx.beginPath();
+    ctx.arc(centerX, rotateY, 6, 0, Math.PI * 2);
+    ctx.fillStyle = "#ffffff";
+    ctx.fill();
+    ctx.strokeStyle = "#0066ff";
+    ctx.stroke();
+
+    ctx.restore();
   }
-
-  // Rotation handle (circle above center)
-  const centerX = (minX + maxX) / 2;
-  const rotateY = minY - 25;
-
-  // Line from top center to rotation handle
-  ctx.beginPath();
-  ctx.moveTo(centerX, minY);
-  ctx.lineTo(centerX, rotateY);
-  ctx.strokeStyle = "#0066ff";
-  ctx.lineWidth = 1.5;
-  ctx.stroke();
-
-  // Rotation circle
-  ctx.beginPath();
-  ctx.arc(centerX, rotateY, 6, 0, Math.PI * 2);
-  ctx.fillStyle = "#ffffff";
-  ctx.fill();
-  ctx.strokeStyle = "#0066ff";
-  ctx.stroke();
-
-  ctx.restore();
 }
 
 /**

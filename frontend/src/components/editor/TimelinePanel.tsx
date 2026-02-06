@@ -20,8 +20,8 @@ interface TimelinePanelProps {
   isPlaying: boolean;
   onFrameChange: (frame: number) => void;
   onTogglePlay: () => void;
-  selectedObjectId: string | null;
-  onSelectObject: (id: string | null) => void;
+  selectedObjectIds: string[];
+  onSelectObject: (ids: string[]) => void;
   // Nested editing context
   editingObjectId: string | null;
   editingTimelineId: string;
@@ -73,6 +73,9 @@ const ANIMATABLE_PROPERTIES = [
   { key: "transform.sy", label: "Scale Y", short: "SY" },
   { key: "transform.r", label: "Rotation", short: "R" },
   { key: "style.opacity", label: "Opacity", short: "O" },
+  { key: "style.fill", label: "Fill", short: "F" },
+  { key: "style.stroke", label: "Stroke", short: "S" },
+  { key: "style.strokeWidth", label: "Stroke W", short: "SW" },
 ] as const;
 
 // CSS background for grid lines — renders the grid without DOM elements
@@ -99,7 +102,7 @@ export function TimelinePanel({
   isPlaying,
   onFrameChange,
   onTogglePlay,
-  selectedObjectId,
+  selectedObjectIds,
   onSelectObject,
   editingObjectId,
   editingTimelineId,
@@ -604,9 +607,9 @@ export function TimelinePanel({
         {/* Record keyframe button */}
         <button
           onClick={onRecordKeyframe}
-          disabled={!selectedObjectId}
+          disabled={selectedObjectIds.length === 0}
           className={`flex h-6 items-center gap-1 px-2 rounded text-xs ${
-            selectedObjectId
+            selectedObjectIds.length > 0
               ? "bg-red-600 hover:bg-red-500 text-white"
               : "bg-gray-700 text-gray-500 cursor-not-allowed"
           }`}
@@ -726,7 +729,7 @@ export function TimelinePanel({
             {layerObjects.map((obj) => {
               const isExpanded = expandedObjects.has(obj.id);
               const objProps = keyframesByObjectProperty.get(obj.id);
-              const isSelected = obj.id === selectedObjectId;
+              const isSelected = selectedObjectIds.includes(obj.id);
               const aggregateFrames = getAggregateKeyframeFrames(obj.id);
 
               return (
@@ -735,7 +738,7 @@ export function TimelinePanel({
                   <div className="flex" style={{ height: ROW_HEIGHT }}>
                     {/* Layer name - sticky left */}
                     <div
-                      onClick={() => onSelectObject(isSelected ? null : obj.id)}
+                      onClick={() => onSelectObject(isSelected ? [] : [obj.id])}
                       onDoubleClick={() => handleLayerDoubleClick(obj.id)}
                       className={`sticky left-0 z-10 flex flex-shrink-0 cursor-pointer items-center border-b border-r border-gray-800/50 bg-gray-900 px-1 text-xs ${
                         isSelected
