@@ -385,11 +385,6 @@ export function hitTestHandle(
 
   for (const corner of corners) {
     if (Math.hypot(x - corner.x, y - corner.y) < handleRadius) {
-        "[DEBUG commands] hit corner:",
-        corner.type,
-        "distance=",
-        dist,
-      );
       return corner.type;
     }
   }
