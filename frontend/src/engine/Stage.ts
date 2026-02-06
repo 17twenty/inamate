@@ -180,6 +180,14 @@ export class Stage {
   }
 
   /**
+   * Get the current frame number.
+   */
+  getCurrentFrame(): number {
+    if (!this.wasmReady) return 0;
+    return wasm.getFrame();
+  }
+
+  /**
    * Force a re-render (e.g., during drag operations).
    */
   invalidate(): void {
@@ -268,8 +276,8 @@ export class Stage {
     const loop = (time: number) => {
       this.rafId = requestAnimationFrame(loop);
 
-      // Skip if WASM isn't ready yet
-      if (!this.wasmReady) return;
+      // Skip if WASM isn't ready yet or no document loaded
+      if (!this.wasmReady || !this.scene) return;
 
       // Check if we should advance frame (if playing)
       const elapsed = time - this.lastFrameTime;
@@ -277,14 +285,16 @@ export class Stage {
         this.lastFrameTime = time - (elapsed % this.frameInterval);
 
         // Tick advances frame if playing and returns draw commands
-        this.lastCommands = wasm.tick();
+        const commands = wasm.tick();
+        this.lastCommands = commands || [];
         this.render();
 
         // Notify frame change
         this.events.onFrameChange?.(wasm.getFrame());
       } else if (!wasm.isPlaying()) {
         // Even if not playing, render current state
-        this.lastCommands = wasm.render();
+        const commands = wasm.render();
+        this.lastCommands = commands || [];
         this.render();
       }
     };

@@ -1,4 +1,4 @@
-import { useRef, useCallback, useState } from "react";
+import React, { useRef, useCallback, useState } from "react";
 import type { InDocument } from "../../types/document";
 
 export interface BreadcrumbEntry {
@@ -30,13 +30,25 @@ interface TimelinePanelProps {
     trackId: string,
     newFrame: number,
   ) => void;
+  onRecordKeyframe?: () => void;
 }
 
 const LAYER_NAME_WIDTH = 144; // w-36 = 9rem = 144px
 const ROW_HEIGHT = 24; // h-6 = 1.5rem = 24px
+const PROPERTY_ROW_HEIGHT = 20; // Slightly smaller for property rows
 const HEADER_HEIGHT = 20; // h-5 = 1.25rem = 20px
 const MIN_PANEL_HEIGHT = 100;
 const MAX_PANEL_HEIGHT = 400;
+
+// Animatable properties configuration
+const ANIMATABLE_PROPERTIES = [
+  { key: "transform.x", label: "Position X", short: "X" },
+  { key: "transform.y", label: "Position Y", short: "Y" },
+  { key: "transform.sx", label: "Scale X", short: "SX" },
+  { key: "transform.sy", label: "Scale Y", short: "SY" },
+  { key: "transform.r", label: "Rotation", short: "R" },
+  { key: "style.opacity", label: "Opacity", short: "O" },
+] as const;
 
 export function TimelinePanel({
   document: doc,
@@ -56,10 +68,28 @@ export function TimelinePanel({
   onAddKeyframe,
   onDeleteKeyframe,
   onMoveKeyframe,
+  onRecordKeyframe,
 }: TimelinePanelProps) {
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const [panelHeight, setPanelHeight] = useState(192); // Default h-48 = 12rem = 192px
   const resizingRef = useRef(false);
+
+  // Expand/collapse state for objects
+  const [expandedObjects, setExpandedObjects] = useState<Set<string>>(
+    new Set(),
+  );
+
+  const toggleExpanded = useCallback((objectId: string) => {
+    setExpandedObjects((prev) => {
+      const next = new Set(prev);
+      if (next.has(objectId)) {
+        next.delete(objectId);
+      } else {
+        next.add(objectId);
+      }
+      return next;
+    });
+  }, []);
 
   // Keyframe drag state
   const [draggingKeyframe, setDraggingKeyframe] = useState<{
@@ -67,6 +97,8 @@ export function TimelinePanel({
     trackId: string;
     startFrame: number;
     currentFrame: number;
+    objectId: string;
+    property: string;
   } | null>(null);
 
   // Get children of the editing context (scene root or symbol)
@@ -85,26 +117,35 @@ export function TimelinePanel({
       : [];
   })();
 
-  // Collect keyframe positions for each layer object
+  // Collect keyframe positions per object and per property
+  // Map: objectId -> property -> frame -> keyframeInfo
   const timeline = doc.timelines[editingTimelineId];
-  const keyframesByObject = new Map<
+  const keyframesByObjectProperty = new Map<
     string,
-    Map<number, { keyframeId: string; trackId: string }>
+    Map<string, Map<number, { keyframeId: string; trackId: string }>>
   >();
+
   if (timeline) {
     for (const trackId of timeline.tracks) {
       const track = doc.tracks[trackId];
       if (!track) continue;
-      const framesMap =
-        keyframesByObject.get(track.objectId) ||
-        new Map<number, { keyframeId: string; trackId: string }>();
+
+      if (!keyframesByObjectProperty.has(track.objectId)) {
+        keyframesByObjectProperty.set(track.objectId, new Map());
+      }
+      const objProps = keyframesByObjectProperty.get(track.objectId)!;
+
+      if (!objProps.has(track.property)) {
+        objProps.set(track.property, new Map());
+      }
+      const propFrames = objProps.get(track.property)!;
+
       for (const kfId of track.keys) {
         const kf = doc.keyframes[kfId];
         if (kf) {
-          framesMap.set(kf.frame, { keyframeId: kfId, trackId });
+          propFrames.set(kf.frame, { keyframeId: kfId, trackId });
         }
       }
-      keyframesByObject.set(track.objectId, framesMap);
     }
   }
 
@@ -143,19 +184,25 @@ export function TimelinePanel({
     [doc, onEnterSymbol],
   );
 
-  const handleFrameCellDoubleClick = useCallback(
-    (objectId: string, frame: number, e: React.MouseEvent) => {
+  // Handle double-click on a property row's frame cell
+  const handlePropertyFrameDoubleClick = useCallback(
+    (
+      objectId: string,
+      frame: number,
+      property: string,
+      e: React.MouseEvent,
+    ) => {
       e.stopPropagation();
-      const objKeyframes = keyframesByObject.get(objectId);
-      const existingKeyframe = objKeyframes?.get(frame);
+      const objProps = keyframesByObjectProperty.get(objectId);
+      const existingKeyframe = objProps?.get(property)?.get(frame);
 
       if (existingKeyframe && onDeleteKeyframe) {
         onDeleteKeyframe(existingKeyframe.keyframeId, existingKeyframe.trackId);
       } else if (onAddKeyframe) {
-        onAddKeyframe(objectId, frame, "transform.x");
+        onAddKeyframe(objectId, frame, property);
       }
     },
-    [keyframesByObject, onAddKeyframe, onDeleteKeyframe],
+    [keyframesByObjectProperty, onAddKeyframe, onDeleteKeyframe],
   );
 
   // Keyframe drag handlers
@@ -164,6 +211,8 @@ export function TimelinePanel({
       keyframeId: string,
       trackId: string,
       frame: number,
+      objectId: string,
+      property: string,
       e: React.MouseEvent,
     ) => {
       e.stopPropagation();
@@ -173,6 +222,8 @@ export function TimelinePanel({
         trackId,
         startFrame: frame,
         currentFrame: frame,
+        objectId,
+        property,
       });
     },
     [],
@@ -249,6 +300,13 @@ export function TimelinePanel({
 
   const currentTime = (currentFrame / fps).toFixed(2);
 
+  // Helper to check if any property has a keyframe at a given frame
+  const hasAnyKeyframeAtFrame = (objectId: string, frame: number): boolean => {
+    const objProps = keyframesByObjectProperty.get(objectId);
+    if (!objProps) return false;
+    return ANIMATABLE_PROPERTIES.some((p) => objProps.get(p.key)?.has(frame));
+  };
+
   return (
     <div
       className="flex flex-col border-t border-gray-800 bg-gray-900"
@@ -297,6 +355,21 @@ export function TimelinePanel({
               <polygon points="2,1 9,5 2,9" />
             </svg>
           )}
+        </button>
+
+        {/* Record keyframe button */}
+        <button
+          onClick={onRecordKeyframe}
+          disabled={!selectedObjectId}
+          className={`flex h-6 items-center gap-1 px-2 rounded text-xs ${
+            selectedObjectId
+              ? "bg-red-600 hover:bg-red-500 text-white"
+              : "bg-gray-700 text-gray-500 cursor-not-allowed"
+          }`}
+          title="Record keyframe at current frame (K)"
+        >
+          <span className="text-[10px]">●</span>
+          <span>Key</span>
         </button>
 
         <span className="text-xs tabular-nums text-gray-400">
@@ -355,99 +428,181 @@ export function TimelinePanel({
             onMouseLeave={handleKeyframeDragEnd}
           >
             {layerObjects.map((obj) => {
-              const objKeyframes = keyframesByObject.get(obj.id);
+              const isExpanded = expandedObjects.has(obj.id);
+              const objProps = keyframesByObjectProperty.get(obj.id);
+              const isSelected = obj.id === selectedObjectId;
+
               return (
-                <div
-                  key={obj.id}
-                  className="flex"
-                  style={{ height: ROW_HEIGHT }}
-                >
-                  {/* Layer name - sticky left */}
-                  <div
-                    onClick={() =>
-                      onSelectObject(
-                        obj.id === selectedObjectId ? null : obj.id,
-                      )
-                    }
-                    onDoubleClick={() => handleLayerDoubleClick(obj.id)}
-                    className={`sticky left-0 z-10 flex flex-shrink-0 cursor-pointer items-center border-b border-r border-gray-800/50 bg-gray-900 px-2 text-xs ${
-                      obj.id === selectedObjectId
-                        ? "bg-blue-900/30 text-blue-300"
-                        : "text-gray-400 hover:bg-gray-800/50"
-                    }`}
-                    style={{ width: LAYER_NAME_WIDTH }}
-                  >
-                    <span className="mr-2 text-gray-600">
-                      {typeIcon(obj.type)}
-                    </span>
-                    <span className="truncate">{obj.type}</span>
-                    {obj.type === "Symbol" && (
-                      <span className="ml-auto text-[9px] text-gray-600">
-                        &#9654;
+                <React.Fragment key={obj.id}>
+                  {/* Object row (parent) */}
+                  <div className="flex" style={{ height: ROW_HEIGHT }}>
+                    {/* Layer name - sticky left */}
+                    <div
+                      onClick={() => onSelectObject(isSelected ? null : obj.id)}
+                      onDoubleClick={() => handleLayerDoubleClick(obj.id)}
+                      className={`sticky left-0 z-10 flex flex-shrink-0 cursor-pointer items-center border-b border-r border-gray-800/50 bg-gray-900 px-1 text-xs ${
+                        isSelected
+                          ? "bg-blue-900/30 text-blue-300"
+                          : "text-gray-400 hover:bg-gray-800/50"
+                      }`}
+                      style={{ width: LAYER_NAME_WIDTH }}
+                    >
+                      {/* Expand/collapse toggle */}
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          toggleExpanded(obj.id);
+                        }}
+                        className="mr-1 w-4 h-4 flex items-center justify-center text-gray-500 hover:text-gray-300"
+                      >
+                        <span className="text-[8px]">
+                          {isExpanded ? "\u25BC" : "\u25B6"}
+                        </span>
+                      </button>
+                      <span className="mr-1 text-gray-600">
+                        {typeIcon(obj.type)}
                       </span>
-                    )}
+                      <span className="truncate">{obj.type}</span>
+                      {obj.type === "Symbol" && (
+                        <span className="ml-auto text-[9px] text-gray-600">
+                          &#9654;
+                        </span>
+                      )}
+                    </div>
+
+                    {/* Frame cells - show aggregate keyframes */}
+                    <div
+                      className={`flex border-b border-gray-800/30 ${
+                        isSelected ? "bg-blue-900/10" : ""
+                      }`}
+                    >
+                      {Array.from({ length: visibleFrames }, (_, frame) => {
+                        const hasKeyframe = hasAnyKeyframeAtFrame(
+                          obj.id,
+                          frame,
+                        );
+
+                        return (
+                          <div
+                            key={frame}
+                            className={`relative flex-shrink-0 border-r border-gray-800/20 cursor-pointer hover:bg-gray-700/30 ${
+                              frame === 0 ? "bg-gray-700/30" : ""
+                            }`}
+                            style={{ width: frameWidth, height: ROW_HEIGHT }}
+                            onClick={() => onFrameChange(frame)}
+                          >
+                            {hasKeyframe && (
+                              <span className="absolute inset-0 flex items-center justify-center text-[8px] leading-none text-yellow-400">
+                                &#9670;
+                              </span>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
                   </div>
 
-                  {/* Frame cells */}
-                  <div
-                    className={`flex border-b border-gray-800/30 ${
-                      obj.id === selectedObjectId ? "bg-blue-900/10" : ""
-                    }`}
-                  >
-                    {Array.from({ length: visibleFrames }, (_, i) => {
-                      const keyframeData = objKeyframes?.get(i);
-                      const hasKeyframe = !!keyframeData;
-                      // Show keyframe at current drag position
-                      const isDraggedHere =
-                        draggingKeyframe?.currentFrame === i &&
-                        keyframesByObject
-                          .get(obj.id)
-                          ?.get(draggingKeyframe.startFrame)?.keyframeId ===
-                          draggingKeyframe.keyframeId;
-                      // Hide keyframe at original position during drag
-                      const isBeingDragged =
-                        draggingKeyframe &&
-                        keyframeData?.keyframeId ===
-                          draggingKeyframe.keyframeId;
+                  {/* Property sub-rows (when expanded) */}
+                  {isExpanded &&
+                    ANIMATABLE_PROPERTIES.map((prop) => {
+                      const propKeyframes = objProps?.get(prop.key);
+                      const hasKeyframes =
+                        propKeyframes && propKeyframes.size > 0;
+
+                      // Show properties that have keyframes, OR all properties for selected object
+                      if (!hasKeyframes && !isSelected) return null;
 
                       return (
                         <div
-                          key={i}
-                          className={`relative flex-shrink-0 border-r border-gray-800/20 cursor-pointer hover:bg-gray-700/30 ${
-                            i === 0 ? "bg-gray-700/30" : ""
-                          }`}
-                          style={{ width: frameWidth, height: ROW_HEIGHT }}
-                          onClick={() => onFrameChange(i)}
-                          onDoubleClick={(e) =>
-                            handleFrameCellDoubleClick(obj.id, i, e)
-                          }
+                          key={prop.key}
+                          className="flex"
+                          style={{ height: PROPERTY_ROW_HEIGHT }}
                         >
-                          {(hasKeyframe && !isBeingDragged) || isDraggedHere ? (
-                            <span
-                              className={`absolute inset-0 flex items-center justify-center text-[8px] leading-none cursor-grab ${
-                                isDraggedHere
-                                  ? "text-blue-400"
-                                  : "text-yellow-400"
-                              }`}
-                              onMouseDown={(e) => {
-                                if (keyframeData && !isDraggedHere) {
-                                  handleKeyframeDragStart(
-                                    keyframeData.keyframeId,
-                                    keyframeData.trackId,
-                                    i,
-                                    e,
-                                  );
-                                }
-                              }}
-                            >
-                              &#9670;
-                            </span>
-                          ) : null}
+                          {/* Property label (indented) - sticky left */}
+                          <div
+                            className={`sticky left-0 z-10 flex flex-shrink-0 items-center border-b border-r border-gray-800/30 bg-gray-900 pl-6 pr-2 text-[10px] ${
+                              hasKeyframes ? "text-gray-400" : "text-gray-600"
+                            }`}
+                            style={{ width: LAYER_NAME_WIDTH }}
+                          >
+                            {prop.short}
+                          </div>
+
+                          {/* Frame cells for this property */}
+                          <div
+                            className={`flex border-b border-gray-800/20 ${
+                              isSelected ? "bg-blue-900/5" : ""
+                            }`}
+                          >
+                            {Array.from(
+                              { length: visibleFrames },
+                              (_, frame) => {
+                                const kfData = propKeyframes?.get(frame);
+                                const hasKf = !!kfData;
+
+                                // Check if this keyframe is being dragged
+                                const isDraggedHere =
+                                  draggingKeyframe?.currentFrame === frame &&
+                                  draggingKeyframe?.objectId === obj.id &&
+                                  draggingKeyframe?.property === prop.key;
+                                const isBeingDragged =
+                                  draggingKeyframe &&
+                                  kfData?.keyframeId ===
+                                    draggingKeyframe.keyframeId;
+
+                                return (
+                                  <div
+                                    key={frame}
+                                    className={`relative flex-shrink-0 border-r border-gray-800/10 cursor-pointer hover:bg-gray-700/20 ${
+                                      frame === 0 ? "bg-gray-700/20" : ""
+                                    }`}
+                                    style={{
+                                      width: frameWidth,
+                                      height: PROPERTY_ROW_HEIGHT,
+                                    }}
+                                    onClick={() => onFrameChange(frame)}
+                                    onDoubleClick={(e) =>
+                                      handlePropertyFrameDoubleClick(
+                                        obj.id,
+                                        frame,
+                                        prop.key,
+                                        e,
+                                      )
+                                    }
+                                  >
+                                    {((hasKf && !isBeingDragged) ||
+                                      isDraggedHere) && (
+                                      <span
+                                        className={`absolute inset-0 flex items-center justify-center text-[7px] leading-none cursor-grab ${
+                                          isDraggedHere
+                                            ? "text-blue-400"
+                                            : "text-yellow-400"
+                                        }`}
+                                        onMouseDown={(e) => {
+                                          if (kfData && !isDraggedHere) {
+                                            handleKeyframeDragStart(
+                                              kfData.keyframeId,
+                                              kfData.trackId,
+                                              frame,
+                                              obj.id,
+                                              prop.key,
+                                              e,
+                                            );
+                                          }
+                                        }}
+                                      >
+                                        &#9670;
+                                      </span>
+                                    )}
+                                  </div>
+                                );
+                              },
+                            )}
+                          </div>
                         </div>
                       );
                     })}
-                  </div>
-                </div>
+                </React.Fragment>
               );
             })}
 

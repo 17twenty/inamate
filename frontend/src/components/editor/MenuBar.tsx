@@ -36,6 +36,8 @@ interface MenuBarProps {
   onSendToBack: () => void;
   onBringForward: () => void;
   onSendBackward: () => void;
+  // Delete all
+  onDeleteAll: () => void;
 }
 
 export function MenuBar({
@@ -56,6 +58,7 @@ export function MenuBar({
   onSendToBack,
   onBringForward,
   onSendBackward,
+  onDeleteAll,
 }: MenuBarProps) {
   const [openMenu, setOpenMenu] = useState<string | null>(null);
   const barRef = useRef<HTMLDivElement>(null);
@@ -96,6 +99,10 @@ export function MenuBar({
           shortcut: isMac() ? "Del" : "Delete",
           action: onDeleteObject,
           disabled: !selectedObjectId,
+        },
+        {
+          label: "Delete All",
+          action: onDeleteAll,
         },
         { separator: true },
         {

@@ -49,6 +49,12 @@ export interface OperationNackPayload extends OperationNack {}
 // Server → Client: Operation from another user
 export interface OperationBroadcastPayload extends OperationBroadcast {}
 
+// Error payload from server
+export interface ErrorPayload {
+  code: string;
+  message: string;
+}
+
 // Message type constants
 export const MessageTypes = {
   // Presence
@@ -59,6 +65,7 @@ export const MessageTypes = {
 
   // Connection
   WELCOME: "welcome",
+  ERROR: "error",
 
   // Document sync
   DOC_SYNC: "doc.sync",

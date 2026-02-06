@@ -132,13 +132,37 @@ func (h *Hub) addClient(client *Client) {
 		if h.loadDoc == nil {
 			slog.Error("no document loader configured", "project", client.ProjectID)
 			h.mu.Unlock()
+			// Send error to client
+			errPayload, _ := json.Marshal(map[string]string{
+				"code":    "no_loader",
+				"message": "Document loader not configured",
+			})
+			client.Send(&Message{Type: TypeError, Payload: errPayload})
 			return
 		}
 		doc, err := h.loadDoc(client.ProjectID)
 		if err != nil {
-			slog.Error("failed to load document", "project", client.ProjectID, "error", err)
-			h.mu.Unlock()
-			return
+			// For the playground project, create a fresh empty document instead of erroring
+			if client.ProjectID == "proj_playground" {
+				slog.Info("creating fresh playground document", "project", client.ProjectID)
+				doc = document.NewEmptyDocument(
+					client.ProjectID,
+					"Playground",
+					"scene_playground",
+					"root_playground",
+					"timeline_playground",
+				)
+			} else {
+				slog.Error("failed to load document", "project", client.ProjectID, "error", err)
+				h.mu.Unlock()
+				// Send error to client
+				errPayload, _ := json.Marshal(map[string]string{
+					"code":    "load_failed",
+					"message": "Failed to load project. The project may not exist or has no document.",
+				})
+				client.Send(&Message{Type: TypeError, Payload: errPayload})
+				return
+			}
 		}
 		room = NewRoom(client.ProjectID, doc)
 		h.rooms[client.ProjectID] = room

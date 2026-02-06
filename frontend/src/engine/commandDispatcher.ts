@@ -748,6 +748,13 @@ class CommandDispatcher {
         // Add to track's keys array (maintain sorted order by frame)
         const track = doc.tracks[op.trackId];
         if (track) {
+          // Check if keyframe already exists in track to prevent duplicates
+          if (track.keys.includes(op.keyframe.id)) {
+            // Already exists, just update the keyframe data
+            store.setDocument({ ...doc, keyframes: newKeyframes });
+            break;
+          }
+
           const newKeys = [...track.keys];
           let insertIdx = newKeys.length;
           for (let i = 0; i < newKeys.length; i++) {

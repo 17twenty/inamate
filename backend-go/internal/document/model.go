@@ -141,7 +141,7 @@ func NewEmptyDocument(projectID, projectName, sceneID, rootID, timelineID string
 				Name:       "Scene 1",
 				Width:      1280,
 				Height:     720,
-				Background: "#1a1a2e",
+				Background: "#ffffff",
 				Root:       rootID,
 			},
 		},

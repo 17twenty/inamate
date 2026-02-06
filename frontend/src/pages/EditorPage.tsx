@@ -24,6 +24,7 @@ import type {
   OperationAckPayload,
   OperationNackPayload,
   OperationBroadcastPayload,
+  ErrorPayload,
 } from "../types/protocol";
 import type {
   SymbolData,
@@ -60,6 +61,7 @@ export function EditorPage() {
   const [isPlaying, setIsPlaying] = useState(false);
   const [showTimeline, setShowTimeline] = useState(true);
   const [showProperties, setShowProperties] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   // Editing context stack for nested Symbol editing
   const [editingStack, setEditingStack] = useState<EditingContext[]>([]);
@@ -102,11 +104,19 @@ export function EditorPage() {
         return;
       }
 
+      // Handle error message (e.g., document load failed)
+      if (msg.type === MessageTypes.ERROR) {
+        const error = msg.payload as ErrorPayload;
+        setLoadError(error.message);
+        return;
+      }
+
       // Handle document sync (sent when client joins)
       if (msg.type === MessageTypes.DOC_SYNC) {
         const syncedDoc = msg.payload as InDocument;
         setDocument(syncedDoc);
         stageRef.current.loadDocument(syncedDoc);
+        setLoadError(null); // Clear any previous error
         return;
       }
 
@@ -441,37 +451,23 @@ export function EditorPage() {
           }
         } else {
           // No shift: scale from opposite corner (anchor)
-          let anchorX: number, anchorY: number;
-          let signX = 1,
-            signY = 1;
+          // The anchor corner stays fixed while the dragged corner follows the mouse
 
-          switch (drag.dragType) {
-            case "scale-nw":
-              anchorX = maxX;
-              anchorY = maxY;
-              signX = -1;
-              signY = -1;
-              break;
-            case "scale-ne":
-              anchorX = minX;
-              anchorY = maxY;
-              signY = -1;
-              break;
-            case "scale-sw":
-              anchorX = maxX;
-              anchorY = minY;
-              signX = -1;
-              break;
-            case "scale-se":
-            default:
-              anchorX = minX;
-              anchorY = minY;
-              break;
-          }
+          // Determine which corner is being dragged and which is the anchor
+          const isDraggingLeft =
+            drag.dragType === "scale-nw" || drag.dragType === "scale-sw";
+          const isDraggingTop =
+            drag.dragType === "scale-nw" || drag.dragType === "scale-ne";
 
-          // Calculate new dimensions based on mouse position relative to anchor
-          const newWidth = (x - anchorX) * signX;
-          const newHeight = (y - anchorY) * signY;
+          // Anchor is the opposite corner
+          const anchorX = isDraggingLeft ? maxX : minX;
+          const anchorY = isDraggingTop ? maxY : minY;
+
+          // Calculate new width/height based on mouse distance from anchor
+          // For left-side handles, width grows as mouse moves left (negative x direction)
+          // For top-side handles, height grows as mouse moves up (negative y direction)
+          const newWidth = isDraggingLeft ? anchorX - x : x - anchorX;
+          const newHeight = isDraggingTop ? anchorY - y : y - anchorY;
 
           // Calculate scale factors (prevent negative/zero scale)
           const scaleX = Math.max(0.01, newWidth / drag.origWidth);
@@ -481,15 +477,16 @@ export function EditorPage() {
           newTransform.sy = drag.origSy * scaleY;
 
           // Adjust position to keep the anchor corner fixed
-          // The amount to move depends on how much the size changed
-          const deltaWidth = newWidth - drag.origWidth;
-          const deltaHeight = newHeight - drag.origHeight;
-
-          if (drag.dragType === "scale-nw" || drag.dragType === "scale-sw") {
-            newTransform.x = drag.origX - deltaWidth;
+          // When scaling from left, the left edge moves, so x position changes
+          // When scaling from top, the top edge moves, so y position changes
+          if (isDraggingLeft) {
+            // New left edge should be at mouse x position
+            // Object x is the left edge, so set it to where the mouse is
+            newTransform.x = x;
           }
-          if (drag.dragType === "scale-nw" || drag.dragType === "scale-ne") {
-            newTransform.y = drag.origY - deltaHeight;
+          if (isDraggingTop) {
+            // New top edge should be at mouse y position
+            newTransform.y = y;
           }
         }
       }
@@ -622,6 +619,23 @@ export function EditorPage() {
     setSelectedObjectId(null);
   }, []);
 
+  const handleDeleteAll = useCallback(() => {
+    if (!doc) return;
+    const scene = Object.values(doc.scenes)[0];
+    if (!scene) return;
+    const root = doc.objects[scene.root];
+    if (!root) return;
+
+    // Delete all children of the root (all objects on canvas)
+    for (const childId of [...root.children]) {
+      commandDispatcher.dispatch({
+        type: "object.delete",
+        objectId: childId,
+      });
+    }
+    setSelectedObjectId(null);
+  }, [doc]);
+
   // --- Properties panel handlers ---
 
   const handleSceneUpdate = useCallback(
@@ -744,55 +758,90 @@ export function EditorPage() {
 
   const handleAddKeyframe = useCallback(
     (objectId: string, frame: number, property: string) => {
-      if (!doc || !currentContext) return;
+      // Get fresh document state from store to avoid stale closure issues
+      // when multiple keyframes are added in rapid succession
+      const freshDoc = useEditorStore.getState().document;
 
-      const timeline = doc.timelines[currentContext.timelineId];
+      if (!freshDoc || !currentContext) return;
+
+      const timeline = freshDoc.timelines[currentContext.timelineId];
       if (!timeline) return;
 
-      const obj = doc.objects[objectId];
+      const obj = freshDoc.objects[objectId];
       if (!obj) return;
 
+      const value = getPropertyValue(obj, property);
+
       // Find existing track for this object/property
-      let trackId = timeline.tracks.find((tid) => {
-        const track = doc.tracks[tid];
+      const trackId = timeline.tracks.find((tid) => {
+        const track = freshDoc.tracks[tid];
         return (
           track && track.objectId === objectId && track.property === property
         );
       });
 
-      // If no track exists, create one first
-      if (!trackId) {
-        trackId = crypto.randomUUID();
+      // If track exists, check if there's already a keyframe at this frame
+      if (trackId) {
+        const track = freshDoc.tracks[trackId];
+        if (track) {
+          const existingKeyframeId = track.keys.find((kfId) => {
+            const kf = freshDoc.keyframes[kfId];
+            return kf && kf.frame === frame;
+          });
+
+          if (existingKeyframeId) {
+            // Update existing keyframe instead of adding new one
+            commandDispatcher.dispatch({
+              type: "keyframe.update",
+              keyframeId: existingKeyframeId,
+              trackId,
+              changes: { value },
+            });
+            return;
+          }
+        }
+
+        // No existing keyframe at this frame, add new one
+        const keyframeId = crypto.randomUUID();
+        commandDispatcher.dispatch({
+          type: "keyframe.add",
+          trackId,
+          keyframe: {
+            id: keyframeId,
+            frame,
+            value,
+            easing: "linear",
+          },
+        });
+      } else {
+        // No track exists, create one and add keyframe
+        const newTrackId = crypto.randomUUID();
         commandDispatcher.dispatch({
           type: "track.create",
           track: {
-            id: trackId,
+            id: newTrackId,
             objectId,
             property,
             keys: [],
           },
           timelineId: currentContext.timelineId,
         });
+
+        // Add the keyframe to the new track
+        const keyframeId = crypto.randomUUID();
+        commandDispatcher.dispatch({
+          type: "keyframe.add",
+          trackId: newTrackId,
+          keyframe: {
+            id: keyframeId,
+            frame,
+            value,
+            easing: "linear",
+          },
+        });
       }
-
-      // Now add the keyframe
-      const keyframeId = crypto.randomUUID();
-      const value = getPropertyValue(obj, property);
-
-      const keyframe: Keyframe = {
-        id: keyframeId,
-        frame,
-        value,
-        easing: "linear",
-      };
-
-      commandDispatcher.dispatch({
-        type: "keyframe.add",
-        trackId,
-        keyframe,
-      });
     },
-    [doc, currentContext, getPropertyValue],
+    [currentContext, getPropertyValue],
   );
 
   const handleDeleteKeyframe = useCallback(
@@ -919,6 +968,80 @@ export function EditorPage() {
     handleSendBackward,
   ]);
 
+  // --- Record Keyframe handler ---
+
+  const handleRecordKeyframe = useCallback(() => {
+    // Get fresh document state from store
+    const freshDoc = useEditorStore.getState().document;
+
+    if (!selectedObjectId || !freshDoc || !currentContext) return;
+
+    const obj = freshDoc.objects[selectedObjectId];
+    if (!obj) return;
+
+    const frame = stageRef.current.getCurrentFrame();
+
+    // Record all numeric transform and style properties at current frame
+    const propertiesToRecord = [
+      "transform.x",
+      "transform.y",
+      "transform.sx",
+      "transform.sy",
+      "transform.r",
+      "style.opacity",
+    ];
+
+    for (const property of propertiesToRecord) {
+      handleAddKeyframe(selectedObjectId, frame, property);
+    }
+  }, [selectedObjectId, currentContext, handleAddKeyframe]);
+
+  // K shortcut for record keyframe
+  useEffect(() => {
+    const handleRecordKeyframeShortcut = (e: KeyboardEvent) => {
+      // K = Record keyframe at current frame (not in input fields)
+      if (
+        (e.key === "k" || e.key === "K") &&
+        !e.metaKey &&
+        !e.ctrlKey &&
+        !e.altKey
+      ) {
+        const target = e.target as HTMLElement;
+        if (target.tagName === "INPUT" || target.tagName === "TEXTAREA") return;
+
+        e.preventDefault();
+        handleRecordKeyframe();
+      }
+    };
+
+    window.addEventListener("keydown", handleRecordKeyframeShortcut);
+    return () =>
+      window.removeEventListener("keydown", handleRecordKeyframeShortcut);
+  }, [handleRecordKeyframe]);
+
+  // Delete and Select All shortcuts
+  useEffect(() => {
+    const handleEditShortcuts = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement;
+      if (target.tagName === "INPUT" || target.tagName === "TEXTAREA") return;
+
+      // Delete/Backspace = Delete selected object
+      if (e.key === "Backspace" || e.key === "Delete") {
+        e.preventDefault();
+        handleDeleteObject();
+      }
+
+      // Cmd+A = Select All (select first object for now, multi-select later)
+      if ((e.metaKey || e.ctrlKey) && e.key === "a") {
+        e.preventDefault();
+        handleSelectAll();
+      }
+    };
+
+    window.addEventListener("keydown", handleEditShortcuts);
+    return () => window.removeEventListener("keydown", handleEditShortcuts);
+  }, [handleDeleteObject, handleSelectAll]);
+
   const handleNewDocument = useCallback(() => {
     // Navigate to projects list to create a new project
     navigate("/projects");
@@ -957,6 +1080,51 @@ export function EditorPage() {
     return doc.objects[selectedObjectId] || null;
   }, [doc, selectedObjectId]);
 
+  // Show error UI if document failed to load
+  if (loadError) {
+    const isAnonymous = !token;
+    return (
+      <div className="flex h-screen flex-col items-center justify-center bg-gray-950 text-white">
+        <h1 className="text-xl font-bold mb-4">Unable to load project</h1>
+        <p className="text-gray-400 mb-6 max-w-md text-center">{loadError}</p>
+        <div className="flex gap-4">
+          {isAnonymous ? (
+            <>
+              <button
+                onClick={() => navigate("/login")}
+                className="px-4 py-2 bg-blue-600 hover:bg-blue-500 rounded font-medium"
+              >
+                Login to Create Projects
+              </button>
+              <button
+                onClick={() => navigate("/register")}
+                className="px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded font-medium"
+              >
+                Register
+              </button>
+            </>
+          ) : (
+            <>
+              <button
+                onClick={() => navigate("/projects")}
+                className="px-4 py-2 bg-blue-600 hover:bg-blue-500 rounded font-medium"
+              >
+                Back to Projects
+              </button>
+              <button
+                disabled
+                className="px-4 py-2 bg-gray-700 text-gray-500 rounded cursor-not-allowed"
+                title="Coming Soon"
+              >
+                Import Project
+              </button>
+            </>
+          )}
+        </div>
+      </div>
+    );
+  }
+
   if (!doc || !scene || !currentContext) {
     return (
       <div className="flex h-screen items-center justify-center bg-gray-950">
@@ -986,6 +1154,7 @@ export function EditorPage() {
         onSendToBack={handleSendToBack}
         onBringForward={handleBringForward}
         onSendBackward={handleSendBackward}
+        onDeleteAll={handleDeleteAll}
       />
 
       {/* Main editor area */}
@@ -1048,6 +1217,7 @@ export function EditorPage() {
           onAddKeyframe={handleAddKeyframe}
           onDeleteKeyframe={handleDeleteKeyframe}
           onMoveKeyframe={handleMoveKeyframe}
+          onRecordKeyframe={handleRecordKeyframe}
         />
       )}
     </div>
