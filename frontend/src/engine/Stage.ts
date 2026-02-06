@@ -32,6 +32,7 @@ export class Stage {
 
   private selectedObjectId: string | null = null;
   private lastCommands: DrawCommand[] = [];
+  private needsRender = true; // Dirty flag for paused re-render
 
   // Queue for operations before WASM is ready
   private pendingDocument: InDocument | null = null;
@@ -102,6 +103,7 @@ export class Stage {
     this.scene = wasm.getScene();
     this.updateFrameInterval();
     this.resizeCanvas();
+    this.needsRender = true;
   }
 
   /**
@@ -116,7 +118,18 @@ export class Stage {
     wasm.updateDocument(doc);
     this.scene = wasm.getScene();
     this.updateFrameInterval();
-    // Don't resize canvas — scene dimensions haven't changed
+    this.needsRender = true;
+  }
+
+  /**
+   * Switch the active scene in the engine.
+   */
+  setScene(sceneId: string): void {
+    if (!this.wasmReady) return;
+    wasm.setScene(sceneId);
+    this.scene = wasm.getScene();
+    this.resizeCanvas();
+    this.needsRender = true;
   }
 
   /**
@@ -191,6 +204,7 @@ export class Stage {
   seek(frame: number): void {
     if (!this.wasmReady) return;
     wasm.setPlayhead(frame);
+    this.needsRender = true;
     this.events.onFrameChange?.(frame);
   }
 
@@ -206,7 +220,7 @@ export class Stage {
    * Force a re-render (e.g., during drag operations).
    */
   invalidate(): void {
-    this.render();
+    this.needsRender = true;
   }
 
   // --- Hit Testing ---
@@ -306,11 +320,12 @@ export class Stage {
 
         // Notify frame change
         this.events.onFrameChange?.(wasm.getFrame());
-      } else if (!wasm.isPlaying()) {
-        // Even if not playing, render current state
+      } else if (!wasm.isPlaying() && this.needsRender) {
+        // Only re-render when paused if something actually changed
         const commands = wasm.render();
         this.lastCommands = commands || [];
         this.render();
+        this.needsRender = false;
       }
     };
 

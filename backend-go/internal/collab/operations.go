@@ -83,8 +83,14 @@ func (ds *DocumentState) applyOperationLocked(op Operation) error {
 		return ds.applyVisibility(op)
 	case "object.locked":
 		return ds.applyLocked(op)
+	case "timeline.update":
+		return ds.applyTimelineUpdate(op)
 	case "scene.update":
 		return ds.applySceneUpdate(op)
+	case "scene.create":
+		return ds.applySceneCreate(op)
+	case "scene.delete":
+		return ds.applySceneDelete(op)
 	case "project.rename":
 		return ds.applyProjectRename(op)
 	case "track.create":
@@ -328,6 +334,87 @@ func (ds *DocumentState) applySceneUpdate(op Operation) error {
 	}
 
 	ds.doc.Scenes[op.SceneID] = scene
+	return nil
+}
+
+func (ds *DocumentState) applyTimelineUpdate(op Operation) error {
+	if op.TimelineID == "" {
+		return fmt.Errorf("timelineId is required")
+	}
+
+	timeline, ok := ds.doc.Timelines[op.TimelineID]
+	if !ok {
+		return fmt.Errorf("timeline not found: %s", op.TimelineID)
+	}
+
+	var changes map[string]interface{}
+	if err := json.Unmarshal(op.Changes, &changes); err != nil {
+		return fmt.Errorf("invalid timeline changes: %w", err)
+	}
+
+	if v, ok := changes["length"].(float64); ok {
+		timeline.Length = int(v)
+	}
+
+	ds.doc.Timelines[op.TimelineID] = timeline
+	return nil
+}
+
+func (ds *DocumentState) applySceneCreate(op Operation) error {
+	if op.Scene == nil {
+		return fmt.Errorf("scene is required")
+	}
+	if op.RootObject == nil {
+		return fmt.Errorf("rootObject is required")
+	}
+
+	var scene document.Scene
+	if err := json.Unmarshal(op.Scene, &scene); err != nil {
+		return fmt.Errorf("invalid scene data: %w", err)
+	}
+
+	// Guard against duplicate application
+	if _, exists := ds.doc.Scenes[scene.ID]; exists {
+		return nil
+	}
+
+	var rootObj document.ObjectNode
+	if err := json.Unmarshal(op.RootObject, &rootObj); err != nil {
+		return fmt.Errorf("invalid root object data: %w", err)
+	}
+
+	ds.doc.Scenes[scene.ID] = scene
+	ds.doc.Objects[rootObj.ID] = rootObj
+	ds.doc.Project.Scenes = append(ds.doc.Project.Scenes, scene.ID)
+
+	return nil
+}
+
+func (ds *DocumentState) applySceneDelete(op Operation) error {
+	if op.SceneID == "" {
+		return fmt.Errorf("sceneId is required")
+	}
+
+	scene, ok := ds.doc.Scenes[op.SceneID]
+	if !ok {
+		return fmt.Errorf("scene not found: %s", op.SceneID)
+	}
+
+	// Remove the root object
+	delete(ds.doc.Objects, scene.Root)
+
+	// Remove the scene
+	delete(ds.doc.Scenes, op.SceneID)
+
+	// Remove from project scenes list
+	newScenes := make([]string, 0, len(ds.doc.Project.Scenes))
+	for _, id := range ds.doc.Project.Scenes {
+		if id != op.SceneID {
+			newScenes = append(newScenes, id)
+		}
+	}
+	ds.doc.Project.Scenes = newScenes
+
 	return nil
 }
 

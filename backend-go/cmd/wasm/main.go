@@ -24,6 +24,7 @@ func main() {
 	inamateEngine.Set("play", js.FuncOf(play))
 	inamateEngine.Set("pause", js.FuncOf(pause))
 	inamateEngine.Set("togglePlay", js.FuncOf(togglePlay))
+	inamateEngine.Set("setScene", js.FuncOf(setScene))
 	inamateEngine.Set("setSelection", js.FuncOf(setSelection))
 	inamateEngine.Set("tick", js.FuncOf(tick))
 
@@ -109,6 +110,14 @@ func pause(this js.Value, args []js.Value) interface{} {
 
 func togglePlay(this js.Value, args []js.Value) interface{} {
 	eng.TogglePlay()
+	return nil
+}
+
+func setScene(this js.Value, args []js.Value) interface{} {
+	if len(args) < 1 {
+		return nil
+	}
+	eng.SetScene(args[0].String())
 	return nil
 }
 

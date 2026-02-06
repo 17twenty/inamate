@@ -93,9 +93,11 @@ type Operation struct {
 	Locked       *bool `json:"locked,omitempty"`
 	PreviousBool *bool `json:"previousBool,omitempty"`
 
-	// For scene.update and keyframe.update
-	SceneID string          `json:"sceneId,omitempty"`
-	Changes json.RawMessage `json:"changes,omitempty"` // Used by scene.update and keyframe.update
+	// For scene.update, scene.create, scene.delete, and keyframe.update
+	SceneID    string          `json:"sceneId,omitempty"`
+	Changes    json.RawMessage `json:"changes,omitempty"`    // Used by scene.update, timeline.update, and keyframe.update
+	Scene      json.RawMessage `json:"scene,omitempty"`      // For scene.create
+	RootObject json.RawMessage `json:"rootObject,omitempty"` // For scene.create
 
 	// For project.rename
 	Name         string `json:"name,omitempty"`

@@ -24,7 +24,10 @@ import type {
   SetLockedOp,
   CreateTrackOp,
   DeleteTrackOp,
+  UpdateTimelineOp,
   UpdateSceneOp,
+  CreateSceneOp,
+  DeleteSceneOp,
   AddKeyframeOp,
   UpdateKeyframeOp,
   DeleteKeyframeOp,
@@ -368,6 +371,39 @@ class CommandDispatcher {
         }
         break;
       }
+
+      case "timeline.update": {
+        const timeline = doc.timelines[op.timelineId];
+        if (timeline) {
+          const previous: UpdateTimelineOp["previous"] = {};
+          if (op.changes.length !== undefined)
+            previous.length = timeline.length;
+          return { ...op, previous } as UpdateTimelineOp;
+        }
+        break;
+      }
+
+      case "scene.create": {
+        // No previous state needed for create - inverse is delete
+        return op;
+      }
+
+      case "scene.delete": {
+        const scene = doc.scenes[op.sceneId];
+        if (scene) {
+          const rootObject = doc.objects[scene.root];
+          const sceneIndex = doc.project.scenes.indexOf(op.sceneId);
+          return {
+            ...op,
+            previous: {
+              scene: { ...scene },
+              rootObject: rootObject ? { ...rootObject } : undefined,
+              sceneIndex: sceneIndex >= 0 ? sceneIndex : 0,
+            },
+          } as DeleteSceneOp;
+        }
+        break;
+      }
     }
 
     return op;
@@ -525,6 +561,40 @@ class CommandDispatcher {
           trackId: op.trackId,
           keyframe: op.previous,
         } as AddKeyframeOp;
+      }
+
+      case "timeline.update": {
+        if (!op.previous) return null;
+        return {
+          ...op,
+          id: crypto.randomUUID(),
+          changes: op.previous,
+          previous: op.changes,
+        };
+      }
+
+      case "scene.create": {
+        // Inverse of create is delete
+        return {
+          id: crypto.randomUUID(),
+          type: "scene.delete",
+          timestamp: Date.now(),
+          clientSeq: 0,
+          sceneId: op.scene.id,
+        } as DeleteSceneOp;
+      }
+
+      case "scene.delete": {
+        if (!op.previous) return null;
+        // Inverse of delete is create
+        return {
+          id: crypto.randomUUID(),
+          type: "scene.create",
+          timestamp: Date.now(),
+          clientSeq: 0,
+          scene: op.previous.scene,
+          rootObject: op.previous.rootObject,
+        } as CreateSceneOp;
       }
 
       default:
@@ -824,6 +894,58 @@ class CommandDispatcher {
         }
 
         store.setDocument({ ...doc, keyframes: newKeyframes });
+        break;
+      }
+
+      case "timeline.update": {
+        const timeline = doc.timelines[op.timelineId];
+        if (!timeline) return;
+        store.setDocument({
+          ...doc,
+          timelines: {
+            ...doc.timelines,
+            [op.timelineId]: { ...timeline, ...op.changes },
+          },
+        });
+        break;
+      }
+
+      case "scene.create": {
+        // Guard against duplicate application
+        if (doc.scenes[op.scene.id]) break;
+        const newObjects = { ...doc.objects };
+        newObjects[op.rootObject.id] = op.rootObject;
+        store.setDocument({
+          ...doc,
+          scenes: {
+            ...doc.scenes,
+            [op.scene.id]: op.scene,
+          },
+          objects: newObjects,
+          project: {
+            ...doc.project,
+            scenes: [...doc.project.scenes, op.scene.id],
+          },
+        });
+        break;
+      }
+
+      case "scene.delete": {
+        const scene = doc.scenes[op.sceneId];
+        if (!scene) return;
+        const newScenes = { ...doc.scenes };
+        delete newScenes[op.sceneId];
+        const newObjects = { ...doc.objects };
+        delete newObjects[scene.root];
+        store.setDocument({
+          ...doc,
+          scenes: newScenes,
+          objects: newObjects,
+          project: {
+            ...doc.project,
+            scenes: doc.project.scenes.filter((id) => id !== op.sceneId),
+          },
+        });
         break;
       }
 

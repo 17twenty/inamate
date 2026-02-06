@@ -74,6 +74,9 @@ export function EditorPage() {
   // Editing context stack for nested Symbol editing
   const [editingStack, setEditingStack] = useState<EditingContext[]>([]);
 
+  // Active scene (for multi-scene support)
+  const [activeSceneId, setActiveSceneId] = useState<string | null>(null);
+
   // Track modifier key states
   const shiftHeldRef = useRef(false);
   const [spaceHeld, setSpaceHeld] = useState(false);
@@ -217,11 +220,18 @@ export function EditorPage() {
     };
   }, []);
 
-  // Wire Stage events to React state (lightweight — only frame number and play state)
+  // Wire Stage events to React state
   useEffect(() => {
     stageRef.current.setEvents({
-      onFrameChange: (frame) => setCurrentFrame(frame),
-      onPlayStateChange: (playing) => setIsPlaying(playing),
+      onFrameChange: (frame) => {
+        setCurrentFrame(frame);
+      },
+      onPlayStateChange: (playing) => {
+        setIsPlaying(playing);
+        if (!playing) {
+          setCurrentFrame(stageRef.current.getCurrentFrame());
+        }
+      },
     });
   }, []);
 
@@ -242,7 +252,7 @@ export function EditorPage() {
     // For local mode (!projectId), document comes from WebSocket doc.sync
   }, [projectId, token, setDocument, navigate]);
 
-  // Initialize editing stack when document loads
+  // Initialize editing stack and active scene when document loads
   useEffect(() => {
     if (!doc) return;
     if (editingStack.length === 0) {
@@ -250,16 +260,18 @@ export function EditorPage() {
         { objectId: null, timelineId: doc.project.rootTimeline },
       ]);
     }
-  }, [doc, editingStack.length]);
+    if (!activeSceneId && doc.project.scenes.length > 0) {
+      setActiveSceneId(doc.project.scenes[0]);
+    }
+  }, [doc, editingStack.length, activeSceneId]);
 
   // Scene metadata (for layout) - get from document directly, not WASM
   // Defined early because callbacks below depend on it
   const scene = useMemo(() => {
     if (!doc) return null;
-    // Get the first scene from the document
-    const sceneId = Object.keys(doc.scenes)[0];
+    const sceneId = activeSceneId || doc.project.scenes[0];
     return sceneId ? doc.scenes[sceneId] : null;
-  }, [doc]);
+  }, [doc, activeSceneId]);
 
   // Reload engine when document changes (e.g. from drag moves, keyframe recording)
   const docVersionRef = useRef(0);
@@ -336,12 +348,12 @@ export function EditorPage() {
     if (!doc) return [];
     return editingStack.map((ctx) => {
       if (ctx.objectId === null) {
-        return { id: null, name: "Scene 1" };
+        return { id: null, name: scene?.name || "Scene 1" };
       }
       const obj = doc.objects[ctx.objectId];
       return { id: ctx.objectId, name: obj?.type || "Symbol" };
     });
-  }, [doc, editingStack]);
+  }, [doc, editingStack, scene]);
 
   // --- Canvas interaction callbacks ---
 
@@ -615,23 +627,19 @@ export function EditorPage() {
   }, [selectedObjectId]);
 
   const handleSelectAll = useCallback(() => {
-    if (!doc) return;
-    const scene = Object.values(doc.scenes)[0];
-    if (!scene) return;
+    if (!doc || !scene) return;
     const root = doc.objects[scene.root];
     if (root && root.children.length > 0) {
       setSelectedObjectId(root.children[0]);
     }
-  }, [doc]);
+  }, [doc, scene]);
 
   const handleDeselect = useCallback(() => {
     setSelectedObjectId(null);
   }, []);
 
   const handleDeleteAll = useCallback(() => {
-    if (!doc) return;
-    const scene = Object.values(doc.scenes)[0];
-    if (!scene) return;
+    if (!doc || !scene) return;
     const root = doc.objects[scene.root];
     if (!root) return;
 
@@ -643,7 +651,7 @@ export function EditorPage() {
       });
     }
     setSelectedObjectId(null);
-  }, [doc]);
+  }, [doc, scene]);
 
   // --- Properties panel handlers ---
 
@@ -658,6 +666,105 @@ export function EditorPage() {
     },
     [scene],
   );
+
+  const handleTimelineUpdate = useCallback(
+    (frames: number) => {
+      if (!currentContext) return;
+      commandDispatcher.dispatch({
+        type: "timeline.update",
+        timelineId: currentContext.timelineId,
+        changes: { length: frames },
+      });
+    },
+    [currentContext],
+  );
+
+  // Ordered scene list for the timeline tabs
+  const sceneList = useMemo(() => {
+    if (!doc) return [];
+    return doc.project.scenes.map((id) => doc.scenes[id]).filter(Boolean);
+  }, [doc]);
+
+  const handleCreateScene = useCallback(() => {
+    if (!doc) return;
+    const sceneId = crypto.randomUUID();
+    const rootId = crypto.randomUUID();
+    // Copy dimensions from current scene, or use defaults
+    const width = scene?.width ?? 1280;
+    const height = scene?.height ?? 720;
+    const name = `Scene ${doc.project.scenes.length + 1}`;
+
+    commandDispatcher.dispatch({
+      type: "scene.create",
+      scene: {
+        id: sceneId,
+        name,
+        width,
+        height,
+        background: "#ffffff",
+        root: rootId,
+      },
+      rootObject: {
+        id: rootId,
+        type: "Group",
+        parent: null,
+        children: [],
+        transform: { x: 0, y: 0, sx: 1, sy: 1, r: 0, ax: 0, ay: 0 },
+        style: { fill: "", stroke: "", strokeWidth: 0, opacity: 1 },
+        visible: true,
+        locked: false,
+        data: {},
+      },
+    });
+
+    // Switch to new scene
+    setActiveSceneId(sceneId);
+    setSelectedObjectId(null);
+    setEditingStack([{ objectId: null, timelineId: doc.project.rootTimeline }]);
+    stageRef.current.setScene(sceneId);
+  }, [doc, scene]);
+
+  const handleDeleteScene = useCallback(
+    (sceneId: string) => {
+      if (!doc || doc.project.scenes.length <= 1) return;
+      commandDispatcher.dispatch({
+        type: "scene.delete",
+        sceneId,
+      });
+
+      // Switch to an adjacent scene
+      const idx = doc.project.scenes.indexOf(sceneId);
+      const nextId = doc.project.scenes[idx === 0 ? 1 : idx - 1];
+      setActiveSceneId(nextId);
+      setSelectedObjectId(null);
+      setEditingStack([
+        { objectId: null, timelineId: doc.project.rootTimeline },
+      ]);
+      stageRef.current.setScene(nextId);
+    },
+    [doc],
+  );
+
+  const handleSwitchScene = useCallback(
+    (sceneId: string) => {
+      if (!doc) return;
+      setActiveSceneId(sceneId);
+      setSelectedObjectId(null);
+      setEditingStack([
+        { objectId: null, timelineId: doc.project.rootTimeline },
+      ]);
+      stageRef.current.setScene(sceneId);
+    },
+    [doc],
+  );
+
+  const handleRenameScene = useCallback((sceneId: string, name: string) => {
+    commandDispatcher.dispatch({
+      type: "scene.update",
+      sceneId,
+      changes: { name },
+    });
+  }, []);
 
   const handleObjectUpdate = useCallback(
     (
@@ -1438,6 +1545,13 @@ export function EditorPage() {
           onMoveKeyframe={handleMoveKeyframe}
           onRecordKeyframe={handleRecordKeyframe}
           onUpdateKeyframeEasing={handleUpdateKeyframeEasing}
+          onTotalFramesChange={handleTimelineUpdate}
+          scenes={sceneList}
+          activeSceneId={activeSceneId || doc.project.scenes[0]}
+          onSwitchScene={handleSwitchScene}
+          onCreateScene={handleCreateScene}
+          onDeleteScene={handleDeleteScene}
+          onRenameScene={handleRenameScene}
         />
       )}
 

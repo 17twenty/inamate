@@ -1,5 +1,11 @@
-import React, { useRef, useCallback, useState } from "react";
-import type { InDocument, EasingType } from "../../types/document";
+import React, {
+  useRef,
+  useCallback,
+  useState,
+  useEffect,
+  useMemo,
+} from "react";
+import type { InDocument, Scene, EasingType } from "../../types/document";
 
 export interface BreadcrumbEntry {
   id: string | null; // null = scene root
@@ -32,6 +38,15 @@ interface TimelinePanelProps {
   ) => void;
   onRecordKeyframe?: () => void;
   onUpdateKeyframeEasing?: (keyframeId: string, easing: EasingType) => void;
+  // Timeline length editing
+  onTotalFramesChange?: (frames: number) => void;
+  // Scene management
+  scenes?: Scene[];
+  activeSceneId?: string;
+  onSwitchScene?: (id: string) => void;
+  onCreateScene?: () => void;
+  onDeleteScene?: (id: string) => void;
+  onRenameScene?: (id: string, name: string) => void;
 }
 
 // Easing options for the context menu
@@ -48,6 +63,7 @@ const PROPERTY_ROW_HEIGHT = 20; // Slightly smaller for property rows
 const HEADER_HEIGHT = 20; // h-5 = 1.25rem = 20px
 const MIN_PANEL_HEIGHT = 100;
 const MAX_PANEL_HEIGHT = 400;
+const FRAME_WIDTH = 12;
 
 // Animatable properties configuration
 const ANIMATABLE_PROPERTIES = [
@@ -58,6 +74,22 @@ const ANIMATABLE_PROPERTIES = [
   { key: "transform.r", label: "Rotation", short: "R" },
   { key: "style.opacity", label: "Opacity", short: "O" },
 ] as const;
+
+// CSS background for grid lines — renders the grid without DOM elements
+function gridBackground(totalFrames: number): React.CSSProperties {
+  return {
+    width: totalFrames * FRAME_WIDTH,
+    backgroundImage: `repeating-linear-gradient(to right, transparent, transparent ${FRAME_WIDTH - 1}px, rgba(255,255,255,0.04) ${FRAME_WIDTH - 1}px, rgba(255,255,255,0.04) ${FRAME_WIDTH}px)`,
+    backgroundSize: `${FRAME_WIDTH}px 100%`,
+  };
+}
+
+/** Convert a mouse event's clientX to a frame index within a grid row */
+function clientXToFrame(e: React.MouseEvent, totalFrames: number): number {
+  const rect = e.currentTarget.getBoundingClientRect();
+  const x = e.clientX - rect.left;
+  return Math.max(0, Math.min(totalFrames - 1, Math.floor(x / FRAME_WIDTH)));
+}
 
 export function TimelinePanel({
   document: doc,
@@ -79,9 +111,16 @@ export function TimelinePanel({
   onMoveKeyframe,
   onRecordKeyframe,
   onUpdateKeyframeEasing,
+  onTotalFramesChange,
+  scenes,
+  activeSceneId,
+  onSwitchScene,
+  onCreateScene,
+  onDeleteScene,
+  onRenameScene,
 }: TimelinePanelProps) {
   const scrollContainerRef = useRef<HTMLDivElement>(null);
-  const [panelHeight, setPanelHeight] = useState(192); // Default h-48 = 12rem = 192px
+  const [panelHeight, setPanelHeight] = useState(192);
   const resizingRef = useRef(false);
 
   // Expand/collapse state for objects
@@ -120,72 +159,75 @@ export function TimelinePanel({
   } | null>(null);
 
   // Get children of the editing context (scene root or symbol)
-  const layerObjects = (() => {
+  const layerObjects = useMemo(() => {
     if (editingObjectId) {
       const obj = doc.objects[editingObjectId];
       if (!obj) return [];
       return obj.children.map((id) => doc.objects[id]).filter(Boolean);
     }
-    // Scene root
-    const sceneId = doc.project.scenes[0];
+    const sceneId = activeSceneId || doc.project.scenes[0];
     const scene = sceneId ? doc.scenes[sceneId] : null;
     const rootObj = scene ? doc.objects[scene.root] : null;
     return rootObj
       ? rootObj.children.map((id) => doc.objects[id]).filter(Boolean)
       : [];
-  })();
+  }, [
+    doc.objects,
+    doc.scenes,
+    doc.project.scenes,
+    editingObjectId,
+    activeSceneId,
+  ]);
 
-  // Collect keyframe positions per object and per property
-  // Map: objectId -> property -> frame -> keyframeInfo
+  // Collect keyframe positions per object and per property (memoized)
   const timeline = doc.timelines[editingTimelineId];
-  const keyframesByObjectProperty = new Map<
-    string,
-    Map<
+  const keyframesByObjectProperty = useMemo(() => {
+    const map = new Map<
       string,
-      Map<number, { keyframeId: string; trackId: string; easing: EasingType }>
-    >
-  >();
+      Map<
+        string,
+        Map<number, { keyframeId: string; trackId: string; easing: EasingType }>
+      >
+    >();
 
-  if (timeline) {
-    for (const trackId of timeline.tracks) {
-      const track = doc.tracks[trackId];
-      if (!track) continue;
+    if (timeline) {
+      for (const trackId of timeline.tracks) {
+        const track = doc.tracks[trackId];
+        if (!track) continue;
 
-      if (!keyframesByObjectProperty.has(track.objectId)) {
-        keyframesByObjectProperty.set(track.objectId, new Map());
-      }
-      const objProps = keyframesByObjectProperty.get(track.objectId)!;
+        if (!map.has(track.objectId)) {
+          map.set(track.objectId, new Map());
+        }
+        const objProps = map.get(track.objectId)!;
 
-      if (!objProps.has(track.property)) {
-        objProps.set(track.property, new Map());
-      }
-      const propFrames = objProps.get(track.property)!;
+        if (!objProps.has(track.property)) {
+          objProps.set(track.property, new Map());
+        }
+        const propFrames = objProps.get(track.property)!;
 
-      for (const kfId of track.keys) {
-        const kf = doc.keyframes[kfId];
-        if (kf) {
-          propFrames.set(kf.frame, {
-            keyframeId: kfId,
-            trackId,
-            easing: kf.easing || "linear",
-          });
+        for (const kfId of track.keys) {
+          const kf = doc.keyframes[kfId];
+          if (kf) {
+            propFrames.set(kf.frame, {
+              keyframeId: kfId,
+              trackId,
+              easing: kf.easing || "linear",
+            });
+          }
         }
       }
     }
-  }
 
-  const frameWidth = 12;
-  const visibleFrames = totalFrames;
-  const gridWidth = visibleFrames * frameWidth;
+    return map;
+  }, [timeline, doc.tracks, doc.keyframes]);
 
-  const handleScrub = useCallback(
-    (e: React.MouseEvent<HTMLDivElement>) => {
-      const rect = e.currentTarget.getBoundingClientRect();
-      const x = e.clientX - rect.left;
-      const frame = Math.max(
-        0,
-        Math.min(totalFrames - 1, Math.floor(x / frameWidth)),
-      );
+  const gridWidth = totalFrames * FRAME_WIDTH;
+
+  // --- Scrub / click handlers that work on the row container ---
+
+  const handleRowClick = useCallback(
+    (e: React.MouseEvent) => {
+      const frame = clientXToFrame(e, totalFrames);
       onFrameChange(frame);
     },
     [totalFrames, onFrameChange],
@@ -194,9 +236,17 @@ export function TimelinePanel({
   const handleScrubDrag = useCallback(
     (e: React.MouseEvent<HTMLDivElement>) => {
       if (e.buttons !== 1) return;
-      handleScrub(e);
+      // Calculate frame from the grid area (offset by layer name width)
+      const container = e.currentTarget;
+      const rect = container.getBoundingClientRect();
+      const x = e.clientX - rect.left - LAYER_NAME_WIDTH;
+      const frame = Math.max(
+        0,
+        Math.min(totalFrames - 1, Math.floor(x / FRAME_WIDTH)),
+      );
+      onFrameChange(frame);
     },
-    [handleScrub],
+    [totalFrames, onFrameChange],
   );
 
   const handleLayerDoubleClick = useCallback(
@@ -209,15 +259,11 @@ export function TimelinePanel({
     [doc, onEnterSymbol],
   );
 
-  // Handle double-click on a property row's frame cell
+  // Handle double-click on a property row's grid area
   const handlePropertyFrameDoubleClick = useCallback(
-    (
-      objectId: string,
-      frame: number,
-      property: string,
-      e: React.MouseEvent,
-    ) => {
+    (objectId: string, property: string, e: React.MouseEvent) => {
       e.stopPropagation();
+      const frame = clientXToFrame(e, totalFrames);
       const objProps = keyframesByObjectProperty.get(objectId);
       const existingKeyframe = objProps?.get(property)?.get(frame);
 
@@ -227,7 +273,7 @@ export function TimelinePanel({
         onAddKeyframe(objectId, frame, property);
       }
     },
-    [keyframesByObjectProperty, onAddKeyframe, onDeleteKeyframe],
+    [totalFrames, keyframesByObjectProperty, onAddKeyframe, onDeleteKeyframe],
   );
 
   // Keyframe drag handlers
@@ -262,7 +308,7 @@ export function TimelinePanel({
       const x = e.clientX - rect.left - LAYER_NAME_WIDTH;
       const frame = Math.max(
         0,
-        Math.min(totalFrames - 1, Math.floor(x / frameWidth)),
+        Math.min(totalFrames - 1, Math.floor(x / FRAME_WIDTH)),
       );
 
       if (frame !== draggingKeyframe.currentFrame) {
@@ -278,7 +324,6 @@ export function TimelinePanel({
   const handleKeyframeDragEnd = useCallback(() => {
     if (!draggingKeyframe) return;
 
-    // Only dispatch move if frame actually changed
     if (
       draggingKeyframe.currentFrame !== draggingKeyframe.startFrame &&
       onMoveKeyframe
@@ -353,13 +398,90 @@ export function TimelinePanel({
   );
 
   const currentTime = (currentFrame / fps).toFixed(2);
+  const totalTime = (totalFrames / fps).toFixed(2);
 
-  // Helper to check if any property has a keyframe at a given frame
-  const hasAnyKeyframeAtFrame = (objectId: string, frame: number): boolean => {
-    const objProps = keyframesByObjectProperty.get(objectId);
-    if (!objProps) return false;
-    return ANIMATABLE_PROPERTIES.some((p) => objProps.get(p.key)?.has(frame));
-  };
+  // Duration editing state
+  const [durationMode, setDurationMode] = useState<"frames" | "seconds">(
+    "frames",
+  );
+  const [editingDuration, setEditingDuration] = useState(false);
+  const [durationInputValue, setDurationInputValue] = useState("");
+  const durationInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (editingDuration && durationInputRef.current) {
+      durationInputRef.current.select();
+    }
+  }, [editingDuration]);
+
+  const startEditingDuration = useCallback(() => {
+    if (!onTotalFramesChange) return;
+    setDurationInputValue(
+      durationMode === "frames"
+        ? String(totalFrames)
+        : (totalFrames / fps).toFixed(2),
+    );
+    setEditingDuration(true);
+  }, [durationMode, totalFrames, fps, onTotalFramesChange]);
+
+  const commitDuration = useCallback(() => {
+    setEditingDuration(false);
+    if (!onTotalFramesChange) return;
+    const val = parseFloat(durationInputValue);
+    if (isNaN(val) || val <= 0) return;
+    const newFrames =
+      durationMode === "frames"
+        ? Math.round(Math.max(1, Math.min(9999, val)))
+        : Math.round(Math.max(1, Math.min(9999, val * fps)));
+    if (newFrames !== totalFrames) {
+      onTotalFramesChange(newFrames);
+    }
+  }, [durationInputValue, durationMode, fps, totalFrames, onTotalFramesChange]);
+
+  const cancelDuration = useCallback(() => {
+    setEditingDuration(false);
+  }, []);
+
+  // Scene tab context menu state
+  const [sceneContextMenu, setSceneContextMenu] = useState<{
+    x: number;
+    y: number;
+    sceneId: string;
+  } | null>(null);
+  const [renamingSceneId, setRenamingSceneId] = useState<string | null>(null);
+  const [renameValue, setRenameValue] = useState("");
+  const renameInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (renamingSceneId && renameInputRef.current) {
+      renameInputRef.current.select();
+    }
+  }, [renamingSceneId]);
+
+  // Collect all keyframe frames for an object (for aggregate row diamonds)
+  const getAggregateKeyframeFrames = useCallback(
+    (objectId: string): Set<number> => {
+      const frames = new Set<number>();
+      const objProps = keyframesByObjectProperty.get(objectId);
+      if (!objProps) return frames;
+      for (const propFrames of objProps.values()) {
+        for (const frame of propFrames.keys()) {
+          frames.add(frame);
+        }
+      }
+      return frames;
+    },
+    [keyframesByObjectProperty],
+  );
+
+  // Header frame labels — only render labels at every 5th frame
+  const headerLabels = useMemo(() => {
+    const labels: { frame: number; left: number }[] = [];
+    for (let i = 0; i < totalFrames; i += 5) {
+      labels.push({ frame: i, left: i * FRAME_WIDTH });
+    }
+    return labels;
+  }, [totalFrames]);
 
   return (
     <div
@@ -372,8 +494,76 @@ export function TimelinePanel({
         onMouseDown={handleResizeStart}
       />
 
-      {/* Breadcrumb + transport controls */}
+      {/* Scene tabs + Breadcrumb + transport controls */}
       <div className="flex items-center gap-3 border-b border-gray-800 px-3 py-1.5 flex-shrink-0">
+        {/* Scene tabs */}
+        {scenes && scenes.length > 0 && (
+          <>
+            <div className="flex items-center gap-0.5">
+              {scenes.map((s) => (
+                <button
+                  key={s.id}
+                  onClick={() => onSwitchScene?.(s.id)}
+                  onContextMenu={(e) => {
+                    e.preventDefault();
+                    setSceneContextMenu({
+                      x: e.clientX,
+                      y: e.clientY,
+                      sceneId: s.id,
+                    });
+                  }}
+                  className={`px-2 py-0.5 text-xs rounded-t border border-b-0 ${
+                    s.id === activeSceneId
+                      ? "bg-gray-800 text-gray-200 border-gray-700"
+                      : "bg-gray-900 text-gray-500 border-gray-800 hover:text-gray-300"
+                  }`}
+                >
+                  {renamingSceneId === s.id ? (
+                    <input
+                      ref={renameInputRef}
+                      type="text"
+                      value={renameValue}
+                      onChange={(e) => setRenameValue(e.target.value)}
+                      onBlur={() => {
+                        if (renameValue.trim() && onRenameScene) {
+                          onRenameScene(s.id, renameValue.trim());
+                        }
+                        setRenamingSceneId(null);
+                      }}
+                      onKeyDown={(e) => {
+                        e.stopPropagation();
+                        if (e.key === "Enter") {
+                          if (renameValue.trim() && onRenameScene) {
+                            onRenameScene(s.id, renameValue.trim());
+                          }
+                          setRenamingSceneId(null);
+                        } else if (e.key === "Escape") {
+                          setRenamingSceneId(null);
+                        }
+                      }}
+                      className="w-16 bg-transparent text-xs text-gray-200 outline-none"
+                      onClick={(e) => e.stopPropagation()}
+                    />
+                  ) : (
+                    s.name
+                  )}
+                </button>
+              ))}
+              {onCreateScene && (
+                <button
+                  onClick={onCreateScene}
+                  className="px-1.5 py-0.5 text-xs text-gray-500 hover:text-gray-300 rounded"
+                  title="Add scene"
+                >
+                  +
+                </button>
+              )}
+            </div>
+            <span className="text-gray-800">|</span>
+          </>
+        )}
+
+        {/* Breadcrumb */}
         <div className="flex items-center gap-1 text-xs">
           {breadcrumb.map((entry, i) => (
             <span key={i} className="flex items-center gap-1">
@@ -426,14 +616,58 @@ export function TimelinePanel({
           <span>Key</span>
         </button>
 
+        {/* Frame counter */}
         <span className="text-xs tabular-nums text-gray-400">
           {String(currentFrame).padStart(3, "0")}
         </span>
         <span className="text-xs text-gray-600">/</span>
-        <span className="text-xs tabular-nums text-gray-500">
-          {totalFrames}
+        {editingDuration ? (
+          <input
+            ref={durationInputRef}
+            type="number"
+            value={durationInputValue}
+            onChange={(e) => setDurationInputValue(e.target.value)}
+            onBlur={commitDuration}
+            onKeyDown={(e) => {
+              e.stopPropagation();
+              if (e.key === "Enter") commitDuration();
+              else if (e.key === "Escape") cancelDuration();
+            }}
+            className="w-14 rounded border border-blue-500 bg-gray-800 px-1 py-0 text-xs tabular-nums text-gray-200 outline-none"
+            min={durationMode === "frames" ? 1 : 0.1}
+            max={durationMode === "frames" ? 9999 : 999}
+            step={durationMode === "frames" ? 1 : 0.1}
+          />
+        ) : (
+          <span
+            className={`text-xs tabular-nums text-gray-500 ${onTotalFramesChange ? "cursor-pointer hover:text-gray-300" : ""}`}
+            onDoubleClick={startEditingDuration}
+            title={
+              onTotalFramesChange ? "Double-click to edit duration" : undefined
+            }
+          >
+            {totalFrames}
+          </span>
+        )}
+
+        {/* Time display */}
+        <span className="ml-1 text-xs text-gray-600">
+          {currentTime}s / {totalTime}s
         </span>
-        <span className="ml-2 text-xs text-gray-600">{currentTime}s</span>
+
+        {/* Frames / seconds toggle */}
+        {onTotalFramesChange && (
+          <button
+            onClick={() =>
+              setDurationMode((m) => (m === "frames" ? "seconds" : "frames"))
+            }
+            className="ml-0.5 px-1 py-0.5 text-[10px] rounded border border-gray-700 text-gray-500 hover:text-gray-300 hover:border-gray-600"
+            title={`Edit in ${durationMode === "frames" ? "seconds" : "frames"} mode`}
+          >
+            {durationMode === "frames" ? "f" : "s"}
+          </button>
+        )}
+
         <span className="ml-auto text-xs text-gray-600">{fps} fps</span>
       </div>
 
@@ -454,16 +688,24 @@ export function TimelinePanel({
               className="sticky left-0 z-30 flex-shrink-0 border-b border-r border-gray-800 bg-gray-900"
               style={{ width: LAYER_NAME_WIDTH }}
             />
-            {/* Frame numbers */}
-            <div className="flex border-b border-gray-800 bg-gray-900">
-              {Array.from({ length: visibleFrames }, (_, i) => (
-                <div
-                  key={i}
-                  className="flex-shrink-0 border-r border-gray-800/30 text-center text-[9px] leading-5 text-gray-600"
-                  style={{ width: frameWidth }}
+            {/* Frame number labels — only at every 5th frame, positioned absolutely */}
+            <div
+              className="relative border-b border-gray-800 bg-gray-900"
+              style={{ ...gridBackground(totalFrames), height: HEADER_HEIGHT }}
+              onClick={handleRowClick}
+            >
+              {headerLabels.map(({ frame, left }) => (
+                <span
+                  key={frame}
+                  className="absolute text-[9px] leading-5 text-gray-600"
+                  style={{
+                    left,
+                    width: FRAME_WIDTH,
+                    textAlign: "center",
+                  }}
                 >
-                  {i % 5 === 0 ? i : ""}
-                </div>
+                  {frame}
+                </span>
               ))}
             </div>
           </div>
@@ -474,7 +716,7 @@ export function TimelinePanel({
             onMouseMove={(e) => {
               if (draggingKeyframe) {
                 handleKeyframeDragMove(e);
-              } else {
+              } else if (e.buttons === 1) {
                 handleScrubDrag(e);
               }
             }}
@@ -485,6 +727,7 @@ export function TimelinePanel({
               const isExpanded = expandedObjects.has(obj.id);
               const objProps = keyframesByObjectProperty.get(obj.id);
               const isSelected = obj.id === selectedObjectId;
+              const aggregateFrames = getAggregateKeyframeFrames(obj.id);
 
               return (
                 <React.Fragment key={obj.id}>
@@ -501,7 +744,6 @@ export function TimelinePanel({
                       }`}
                       style={{ width: LAYER_NAME_WIDTH }}
                     >
-                      {/* Expand/collapse toggle */}
                       <button
                         onClick={(e) => {
                           e.stopPropagation();
@@ -524,35 +766,34 @@ export function TimelinePanel({
                       )}
                     </div>
 
-                    {/* Frame cells - show aggregate keyframes */}
+                    {/* Grid area — single div with CSS grid lines, only render keyframe diamonds */}
                     <div
-                      className={`flex border-b border-gray-800/30 ${
+                      className={`relative border-b border-gray-800/30 cursor-pointer ${
                         isSelected ? "bg-blue-900/10" : ""
                       }`}
+                      style={{
+                        ...gridBackground(totalFrames),
+                        height: ROW_HEIGHT,
+                      }}
+                      onClick={handleRowClick}
                     >
-                      {Array.from({ length: visibleFrames }, (_, frame) => {
-                        const hasKeyframe = hasAnyKeyframeAtFrame(
-                          obj.id,
-                          frame,
-                        );
-
-                        return (
-                          <div
-                            key={frame}
-                            className={`relative flex-shrink-0 border-r border-gray-800/20 cursor-pointer hover:bg-gray-700/30 ${
-                              frame === 0 ? "bg-gray-700/30" : ""
-                            }`}
-                            style={{ width: frameWidth, height: ROW_HEIGHT }}
-                            onClick={() => onFrameChange(frame)}
-                          >
-                            {hasKeyframe && (
-                              <span className="absolute inset-0 flex items-center justify-center text-[8px] leading-none text-yellow-400">
-                                &#9670;
-                              </span>
-                            )}
-                          </div>
-                        );
-                      })}
+                      {Array.from(aggregateFrames).map((frame) => (
+                        <span
+                          key={frame}
+                          className="absolute text-[8px] leading-none text-yellow-400 pointer-events-none"
+                          style={{
+                            left: frame * FRAME_WIDTH,
+                            width: FRAME_WIDTH,
+                            top: 0,
+                            bottom: 0,
+                            display: "flex",
+                            alignItems: "center",
+                            justifyContent: "center",
+                          }}
+                        >
+                          &#9670;
+                        </span>
+                      ))}
                     </div>
                   </div>
 
@@ -563,7 +804,6 @@ export function TimelinePanel({
                       const hasKeyframes =
                         propKeyframes && propKeyframes.size > 0;
 
-                      // Show properties that have keyframes, OR all properties for selected object
                       if (!hasKeyframes && !isSelected) return null;
 
                       return (
@@ -582,92 +822,98 @@ export function TimelinePanel({
                             {prop.short}
                           </div>
 
-                          {/* Frame cells for this property */}
+                          {/* Grid area — only keyframe diamonds rendered as DOM elements */}
                           <div
-                            className={`flex border-b border-gray-800/20 ${
+                            className={`relative border-b border-gray-800/20 cursor-pointer ${
                               isSelected ? "bg-blue-900/5" : ""
                             }`}
+                            style={{
+                              ...gridBackground(totalFrames),
+                              height: PROPERTY_ROW_HEIGHT,
+                            }}
+                            onClick={handleRowClick}
+                            onDoubleClick={(e) =>
+                              handlePropertyFrameDoubleClick(
+                                obj.id,
+                                prop.key,
+                                e,
+                              )
+                            }
                           >
-                            {Array.from(
-                              { length: visibleFrames },
-                              (_, frame) => {
-                                const kfData = propKeyframes?.get(frame);
-                                const hasKf = !!kfData;
+                            {propKeyframes &&
+                              Array.from(propKeyframes.entries()).map(
+                                ([frame, kfData]) => {
+                                  const isDraggedAway =
+                                    draggingKeyframe &&
+                                    kfData.keyframeId ===
+                                      draggingKeyframe.keyframeId &&
+                                    draggingKeyframe.currentFrame !== frame;
 
-                                // Check if this keyframe is being dragged
-                                const isDraggedHere =
-                                  draggingKeyframe?.currentFrame === frame &&
-                                  draggingKeyframe?.objectId === obj.id &&
-                                  draggingKeyframe?.property === prop.key;
-                                const isBeingDragged =
-                                  draggingKeyframe &&
-                                  kfData?.keyframeId ===
-                                    draggingKeyframe.keyframeId;
+                                  if (isDraggedAway) return null;
 
-                                return (
-                                  <div
-                                    key={frame}
-                                    className={`relative flex-shrink-0 border-r border-gray-800/10 cursor-pointer hover:bg-gray-700/20 ${
-                                      frame === 0 ? "bg-gray-700/20" : ""
-                                    }`}
-                                    style={{
-                                      width: frameWidth,
-                                      height: PROPERTY_ROW_HEIGHT,
-                                    }}
-                                    onClick={() => onFrameChange(frame)}
-                                    onDoubleClick={(e) =>
-                                      handlePropertyFrameDoubleClick(
-                                        obj.id,
-                                        frame,
-                                        prop.key,
-                                        e,
-                                      )
-                                    }
-                                  >
-                                    {((hasKf && !isBeingDragged) ||
-                                      isDraggedHere) && (
-                                      <span
-                                        className={`absolute inset-0 flex items-center justify-center text-[7px] leading-none cursor-grab ${
-                                          isDraggedHere
-                                            ? "text-blue-400"
-                                            : kfData?.easing !== "linear"
-                                              ? "text-green-400"
-                                              : "text-yellow-400"
-                                        }`}
-                                        title={
-                                          kfData
-                                            ? `Easing: ${kfData.easing}`
-                                            : undefined
-                                        }
-                                        onMouseDown={(e) => {
-                                          if (kfData && !isDraggedHere) {
-                                            handleKeyframeDragStart(
-                                              kfData.keyframeId,
-                                              kfData.trackId,
-                                              frame,
-                                              obj.id,
-                                              prop.key,
-                                              e,
-                                            );
-                                          }
-                                        }}
-                                        onContextMenu={(e) => {
-                                          if (kfData) {
-                                            handleKeyframeContextMenu(
-                                              e,
-                                              kfData.keyframeId,
-                                              kfData.easing,
-                                            );
-                                          }
-                                        }}
-                                      >
-                                        &#9670;
-                                      </span>
-                                    )}
-                                  </div>
-                                );
-                              },
-                            )}
+                                  return (
+                                    <span
+                                      key={kfData.keyframeId}
+                                      className={`absolute cursor-grab text-[7px] leading-none ${
+                                        kfData.easing !== "linear"
+                                          ? "text-green-400"
+                                          : "text-yellow-400"
+                                      }`}
+                                      title={`Easing: ${kfData.easing}`}
+                                      style={{
+                                        left: frame * FRAME_WIDTH,
+                                        width: FRAME_WIDTH,
+                                        top: 0,
+                                        bottom: 0,
+                                        display: "flex",
+                                        alignItems: "center",
+                                        justifyContent: "center",
+                                      }}
+                                      onMouseDown={(e) =>
+                                        handleKeyframeDragStart(
+                                          kfData.keyframeId,
+                                          kfData.trackId,
+                                          frame,
+                                          obj.id,
+                                          prop.key,
+                                          e,
+                                        )
+                                      }
+                                      onContextMenu={(e) =>
+                                        handleKeyframeContextMenu(
+                                          e,
+                                          kfData.keyframeId,
+                                          kfData.easing,
+                                        )
+                                      }
+                                    >
+                                      &#9670;
+                                    </span>
+                                  );
+                                },
+                              )}
+
+                            {/* Show dragged keyframe at its new position */}
+                            {draggingKeyframe &&
+                              draggingKeyframe.objectId === obj.id &&
+                              draggingKeyframe.property === prop.key && (
+                                <span
+                                  className="absolute text-[7px] leading-none text-blue-400 pointer-events-none"
+                                  style={{
+                                    left:
+                                      draggingKeyframe.currentFrame *
+                                      FRAME_WIDTH,
+                                    width: FRAME_WIDTH,
+                                    top: 0,
+                                    bottom: 0,
+                                    display: "flex",
+                                    alignItems: "center",
+                                    justifyContent: "center",
+                                  }}
+                                >
+                                  &#9670;
+                                </span>
+                              )}
                           </div>
                         </div>
                       );
@@ -676,12 +922,14 @@ export function TimelinePanel({
               );
             })}
 
-            {/* Playhead - positioned over the entire grid */}
+            {/* Playhead */}
             <div
               className="pointer-events-none absolute z-20"
               style={{
                 left:
-                  LAYER_NAME_WIDTH + currentFrame * frameWidth + frameWidth / 2,
+                  LAYER_NAME_WIDTH +
+                  currentFrame * FRAME_WIDTH +
+                  FRAME_WIDTH / 2,
                 top: -HEADER_HEIGHT,
                 bottom: 0,
                 width: 1,
@@ -699,10 +947,54 @@ export function TimelinePanel({
         </div>
       </div>
 
+      {/* Scene tab context menu */}
+      {sceneContextMenu && (
+        <>
+          <div
+            className="fixed inset-0 z-50"
+            onClick={() => setSceneContextMenu(null)}
+            onContextMenu={(e) => {
+              e.preventDefault();
+              setSceneContextMenu(null);
+            }}
+          />
+          <div
+            className="fixed z-50 bg-gray-800 border border-gray-700 rounded shadow-lg py-1 min-w-[120px]"
+            style={{ left: sceneContextMenu.x, top: sceneContextMenu.y }}
+          >
+            <button
+              onClick={() => {
+                const scene = scenes?.find(
+                  (s) => s.id === sceneContextMenu.sceneId,
+                );
+                if (scene) {
+                  setRenameValue(scene.name);
+                  setRenamingSceneId(scene.id);
+                }
+                setSceneContextMenu(null);
+              }}
+              className="w-full text-left px-3 py-1 text-xs text-gray-300 hover:bg-gray-700"
+            >
+              Rename
+            </button>
+            {scenes && scenes.length > 1 && (
+              <button
+                onClick={() => {
+                  onDeleteScene?.(sceneContextMenu.sceneId);
+                  setSceneContextMenu(null);
+                }}
+                className="w-full text-left px-3 py-1 text-xs text-red-400 hover:bg-gray-700"
+              >
+                Delete
+              </button>
+            )}
+          </div>
+        </>
+      )}
+
       {/* Easing context menu */}
       {contextMenu && (
         <>
-          {/* Backdrop to close menu */}
           <div
             className="fixed inset-0 z-50"
             onClick={closeContextMenu}
@@ -711,7 +1003,6 @@ export function TimelinePanel({
               closeContextMenu();
             }}
           />
-          {/* Menu */}
           <div
             className="fixed z-50 bg-gray-800 border border-gray-700 rounded shadow-lg py-1 min-w-[120px]"
             style={{ left: contextMenu.x, top: contextMenu.y }}

@@ -4,7 +4,7 @@
  * Operations capture previous state for undo/redo.
  */
 
-import type { Transform, Style, ObjectNode, Keyframe } from "./document";
+import type { Transform, Style, ObjectNode, Keyframe, Scene } from "./document";
 
 // Base operation interface - all operations extend this
 export interface BaseOperation {
@@ -115,6 +115,15 @@ export interface DeleteKeyframeOp extends BaseOperation {
   previous?: Keyframe; // Full keyframe for undo
 }
 
+// --- Timeline Operations ---
+
+export interface UpdateTimelineOp extends BaseOperation {
+  type: "timeline.update";
+  timelineId: string;
+  changes: { length?: number };
+  previous?: { length?: number };
+}
+
 // --- Scene Operations ---
 
 export interface UpdateSceneOp extends BaseOperation {
@@ -131,6 +140,22 @@ export interface UpdateSceneOp extends BaseOperation {
     width?: number;
     height?: number;
     background?: string;
+  };
+}
+
+export interface CreateSceneOp extends BaseOperation {
+  type: "scene.create";
+  scene: Scene;
+  rootObject: ObjectNode;
+}
+
+export interface DeleteSceneOp extends BaseOperation {
+  type: "scene.delete";
+  sceneId: string;
+  previous?: {
+    scene: Scene;
+    rootObject: ObjectNode;
+    sceneIndex: number;
   };
 }
 
@@ -156,7 +181,10 @@ export type Operation =
   | AddKeyframeOp
   | UpdateKeyframeOp
   | DeleteKeyframeOp
+  | UpdateTimelineOp
   | UpdateSceneOp
+  | CreateSceneOp
+  | DeleteSceneOp
   | RenameProjectOp;
 
 // --- Server Response Types ---

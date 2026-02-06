@@ -166,6 +166,17 @@ func (e *Engine) TogglePlay() {
 	e.playing = !e.playing
 }
 
+// SetScene switches the active scene.
+func (e *Engine) SetScene(sceneID string) {
+	if e.doc == nil {
+		return
+	}
+	if _, ok := e.doc.Scenes[sceneID]; ok {
+		e.sceneID = sceneID
+		e.dirty = true
+	}
+}
+
 // SetSelection sets the selected object IDs.
 func (e *Engine) SetSelection(ids []string) {
 	e.selection = ids

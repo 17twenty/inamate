@@ -24,6 +24,7 @@ interface InamateEngine {
   play(): void;
   pause(): void;
   togglePlay(): void;
+  setScene(sceneId: string): void;
   setSelection(ids: string[]): void;
   tick(): string;
 
@@ -162,6 +163,10 @@ export function pause(): void {
 
 export function togglePlay(): void {
   getEngine().togglePlay();
+}
+
+export function setScene(sceneId: string): void {
+  getEngine().setScene(sceneId);
 }
 
 export function setSelection(ids: string[]): void {
