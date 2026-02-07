@@ -352,8 +352,45 @@ export function getWorldBounds(cmd: DrawCommand): Bounds | null {
 }
 
 /**
- * Render a selection outline around a command with transform handles.
+ * Get the transformed (world-space) corner positions of an object.
+ * Returns corners that follow the object's rotation/scale, unlike getWorldBounds
+ * which returns an axis-aligned bounding box.
  */
+function getTransformedCorners(cmd: DrawCommand): {
+  nw: { x: number; y: number };
+  ne: { x: number; y: number };
+  sw: { x: number; y: number };
+  se: { x: number; y: number };
+} | null {
+  if (!cmd.transform) return null;
+
+  const isImage =
+    cmd.op === "image" && cmd.imageAssetId && cmd.imageWidth && cmd.imageHeight;
+
+  let lMinX: number, lMinY: number, lMaxX: number, lMaxY: number;
+  if (isImage) {
+    lMinX = 0;
+    lMinY = 0;
+    lMaxX = cmd.imageWidth!;
+    lMaxY = cmd.imageHeight!;
+  } else if (cmd.path && cmd.path.length > 0) {
+    const b = getBoundsFromPath(cmd.path);
+    lMinX = b.minX;
+    lMinY = b.minY;
+    lMaxX = b.maxX;
+    lMaxY = b.maxY;
+  } else {
+    return null;
+  }
+
+  return {
+    nw: transformPoint(lMinX, lMinY, cmd.transform),
+    ne: transformPoint(lMaxX, lMinY, cmd.transform),
+    sw: transformPoint(lMinX, lMaxY, cmd.transform),
+    se: transformPoint(lMaxX, lMaxY, cmd.transform),
+  };
+}
+
 export function renderSelectionOutline(
   ctx: CanvasRenderingContext2D,
   cmd: DrawCommand,
@@ -361,49 +398,48 @@ export function renderSelectionOutline(
 ): void {
   if (!cmd.transform) return;
 
-  const isImage =
-    cmd.op === "image" && cmd.imageAssetId && cmd.imageWidth && cmd.imageHeight;
-  const hasPath = cmd.path && cmd.path.length > 0;
-  if (!isImage && !hasPath) return;
+  const corners = getTransformedCorners(cmd);
+  if (!corners) return;
 
-  // Get world bounds for handles
-  const worldBounds = getWorldBounds(cmd);
-  if (!worldBounds) return;
+  const { nw, ne, se, sw } = corners;
 
-  // Draw dashed outline in local space (follows rotation)
+  // Draw outline in world space following object rotation
+  // First pass: solid white background stroke for contrast on any background
   ctx.save();
-  applyTransform(ctx, cmd.transform);
-  if (isImage) {
-    ctx.strokeStyle = "#0066ff";
-    ctx.lineWidth = 2;
-    ctx.setLineDash([5, 5]);
-    ctx.strokeRect(0, 0, cmd.imageWidth!, cmd.imageHeight!);
-  } else {
-    const path = buildPath(cmd.path!);
-    ctx.strokeStyle = "#0066ff";
-    ctx.lineWidth = 2;
-    ctx.setLineDash([5, 5]);
-    ctx.stroke(path);
-  }
+  ctx.setLineDash([]);
+  ctx.strokeStyle = "#ffffff";
+  ctx.lineWidth = 3;
+  ctx.beginPath();
+  ctx.moveTo(nw.x, nw.y);
+  ctx.lineTo(ne.x, ne.y);
+  ctx.lineTo(se.x, se.y);
+  ctx.lineTo(sw.x, sw.y);
+  ctx.closePath();
+  ctx.stroke();
   ctx.restore();
 
-  // Draw handles in world space (axis-aligned) — only for single selection
+  // Second pass: blue dashed stroke on top
+  ctx.save();
+  ctx.setLineDash([5, 5]);
+  ctx.strokeStyle = "#0066ff";
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  ctx.moveTo(nw.x, nw.y);
+  ctx.lineTo(ne.x, ne.y);
+  ctx.lineTo(se.x, se.y);
+  ctx.lineTo(sw.x, sw.y);
+  ctx.closePath();
+  ctx.stroke();
+  ctx.restore();
+
+  // Draw handles at transformed corners — only for single selection
   if (showHandles) {
     ctx.save();
     ctx.setLineDash([]);
-
     const handleSize = 8;
-    const { minX, minY, maxX, maxY } = worldBounds;
 
-    // Corner handles (white fill, blue stroke)
-    const corners = [
-      { x: minX, y: minY }, // NW
-      { x: maxX, y: minY }, // NE
-      { x: minX, y: maxY }, // SW
-      { x: maxX, y: maxY }, // SE
-    ];
-
-    for (const corner of corners) {
+    const allCorners = [nw, ne, sw, se];
+    for (const corner of allCorners) {
       ctx.fillStyle = "#ffffff";
       ctx.strokeStyle = "#0066ff";
       ctx.lineWidth = 1.5;
@@ -421,21 +457,30 @@ export function renderSelectionOutline(
       );
     }
 
-    // Rotation handle (circle above center)
-    const centerX = (minX + maxX) / 2;
-    const rotateY = minY - 25;
+    // Rotation handle — above top-center edge, following rotation
+    const topCenterX = (nw.x + ne.x) / 2;
+    const topCenterY = (nw.y + ne.y) / 2;
+    // Direction perpendicular to top edge, pointing "outward" (away from center)
+    const edgeDx = ne.x - nw.x;
+    const edgeDy = ne.y - nw.y;
+    const edgeLen = Math.hypot(edgeDx, edgeDy);
+    // Perpendicular (rotated -90 degrees, pointing up/outward from top edge)
+    const perpX = edgeLen > 0 ? -edgeDy / edgeLen : 0;
+    const perpY = edgeLen > 0 ? edgeDx / edgeLen : -1;
+    const rotateX = topCenterX + perpX * 25;
+    const rotateY = topCenterY + perpY * 25;
 
     // Line from top center to rotation handle
     ctx.beginPath();
-    ctx.moveTo(centerX, minY);
-    ctx.lineTo(centerX, rotateY);
+    ctx.moveTo(topCenterX, topCenterY);
+    ctx.lineTo(rotateX, rotateY);
     ctx.strokeStyle = "#0066ff";
     ctx.lineWidth = 1.5;
     ctx.stroke();
 
     // Rotation circle
     ctx.beginPath();
-    ctx.arc(centerX, rotateY, 6, 0, Math.PI * 2);
+    ctx.arc(rotateX, rotateY, 6, 0, Math.PI * 2);
     ctx.fillStyle = "#ffffff";
     ctx.fill();
     ctx.strokeStyle = "#0066ff";
@@ -448,40 +493,42 @@ export function renderSelectionOutline(
 /**
  * Hit test for transform handles.
  * Returns the handle type if the point is over a handle, null otherwise.
+ * Handles follow the object's transform (rotation/scale).
  */
 export function hitTestHandle(
   x: number,
   y: number,
   cmd: DrawCommand,
 ): HandleType {
-  if (!cmd.transform) return null;
-  const isImage =
-    cmd.op === "image" && cmd.imageAssetId && cmd.imageWidth && cmd.imageHeight;
-  const hasPath = cmd.path && cmd.path.length > 0;
-  if (!isImage && !hasPath) return null;
+  const corners = getTransformedCorners(cmd);
+  if (!corners) return null;
 
-  const worldBounds = getWorldBounds(cmd);
-  if (!worldBounds) return null;
-
-  const handleRadius = 10; // Slightly larger than visual for easier clicking
-  const { minX, minY, maxX, maxY } = worldBounds;
+  const { nw, ne, sw, se } = corners;
+  const handleRadius = 10;
 
   // Test rotation handle first (highest priority)
-  const centerX = (minX + maxX) / 2;
-  const rotateY = minY - 25;
-  if (Math.hypot(x - centerX, y - rotateY) < handleRadius) {
+  const topCenterX = (nw.x + ne.x) / 2;
+  const topCenterY = (nw.y + ne.y) / 2;
+  const edgeDx = ne.x - nw.x;
+  const edgeDy = ne.y - nw.y;
+  const edgeLen = Math.hypot(edgeDx, edgeDy);
+  const perpX = edgeLen > 0 ? -edgeDy / edgeLen : 0;
+  const perpY = edgeLen > 0 ? edgeDx / edgeLen : -1;
+  const rotateX = topCenterX + perpX * 25;
+  const rotateY = topCenterY + perpY * 25;
+  if (Math.hypot(x - rotateX, y - rotateY) < handleRadius) {
     return "rotate";
   }
 
   // Test corner handles
-  const corners: { type: HandleType; x: number; y: number }[] = [
-    { type: "scale-nw", x: minX, y: minY },
-    { type: "scale-ne", x: maxX, y: minY },
-    { type: "scale-sw", x: minX, y: maxY },
-    { type: "scale-se", x: maxX, y: maxY },
+  const handleCorners: { type: HandleType; x: number; y: number }[] = [
+    { type: "scale-nw", ...nw },
+    { type: "scale-ne", ...ne },
+    { type: "scale-sw", ...sw },
+    { type: "scale-se", ...se },
   ];
 
-  for (const corner of corners) {
+  for (const corner of handleCorners) {
     if (Math.hypot(x - corner.x, y - corner.y) < handleRadius) {
       return corner.type;
     }

@@ -1032,6 +1032,7 @@ export function EditorPage() {
       },
     ) => {
       if (changes.transform) {
+        // Update keyframes if tracks exist for these properties
         const propertyValues: Record<string, number> = {};
         for (const [key, value] of Object.entries(changes.transform)) {
           if (typeof value === "number") {
@@ -1039,34 +1040,43 @@ export function EditorPage() {
           }
         }
         if (Object.keys(propertyValues).length > 0) {
-          updateTransformWithKeyframes(objectId, propertyValues);
+          updateWithKeyframes(objectId, propertyValues);
         }
+
+        // Always update the base document transform too — the Properties panel
+        // reads from the document, so it needs to reflect the user's input.
+        commandDispatcher.dispatch({
+          type: "object.transform",
+          objectId,
+          transform: changes.transform,
+        });
       }
       if (changes.style) {
-        // Build keyframe-aware property values for style changes
+        // Update keyframes if tracks exist for these properties
         const propertyValues: Record<string, number | string> = {};
         for (const [key, value] of Object.entries(changes.style)) {
           propertyValues[`style.${key}`] = value;
         }
-        const handled = updateWithKeyframes(objectId, propertyValues);
+        updateWithKeyframes(objectId, propertyValues);
 
-        // Update base document style for properties NOT handled by keyframes
-        const baseChanges: Record<string, number | string> = {};
-        for (const [key, value] of Object.entries(changes.style)) {
-          if (!handled.has(`style.${key}`)) {
-            baseChanges[key] = value;
-          }
-        }
-        if (Object.keys(baseChanges).length > 0) {
-          commandDispatcher.dispatch({
-            type: "object.style",
-            objectId,
-            style: baseChanges,
-          });
-        }
+        // Always update the base document style too — the Properties panel reads
+        // from the document, so it needs to reflect the user's input even when
+        // keyframes override the rendered value.
+        commandDispatcher.dispatch({
+          type: "object.style",
+          objectId,
+          style: changes.style,
+        });
+      }
+
+      // Force-sync updated doc to WASM and invalidate so canvas updates immediately
+      // rather than waiting for the async useEffect([doc]) cycle
+      const updatedDoc = useEditorStore.getState().document;
+      if (updatedDoc) {
+        stageRef.current.updateDocument(updatedDoc);
       }
     },
-    [updateTransformWithKeyframes, updateWithKeyframes],
+    [updateWithKeyframes],
   );
 
   // --- Object creation ---
