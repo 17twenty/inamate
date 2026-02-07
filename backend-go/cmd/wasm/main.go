@@ -3,8 +3,10 @@
 package main
 
 import (
+	"encoding/json"
 	"syscall/js"
 
+	"github.com/inamate/inamate/backend-go/internal/document"
 	"github.com/inamate/inamate/backend-go/internal/engine"
 )
 
@@ -26,6 +28,9 @@ func main() {
 	inamateEngine.Set("togglePlay", js.FuncOf(togglePlay))
 	inamateEngine.Set("setScene", js.FuncOf(setScene))
 	inamateEngine.Set("setSelection", js.FuncOf(setSelection))
+	inamateEngine.Set("setDragOverlay", js.FuncOf(setDragOverlay))
+	inamateEngine.Set("updateDragOverlay", js.FuncOf(updateDragOverlay))
+	inamateEngine.Set("clearDragOverlay", js.FuncOf(clearDragOverlay))
 	inamateEngine.Set("tick", js.FuncOf(tick))
 
 	// --- Queries (frontend ← backend) ---
@@ -34,6 +39,7 @@ func main() {
 	inamateEngine.Set("getSelectionBounds", js.FuncOf(getSelectionBounds))
 	inamateEngine.Set("getScene", js.FuncOf(getScene))
 	inamateEngine.Set("getPlaybackState", js.FuncOf(getPlaybackState))
+	inamateEngine.Set("getAnimatedTransform", js.FuncOf(getAnimatedTransform))
 	inamateEngine.Set("getDocument", js.FuncOf(getDocument))
 	inamateEngine.Set("getSelection", js.FuncOf(getSelection))
 	inamateEngine.Set("getFrame", js.FuncOf(getFrame))
@@ -142,6 +148,35 @@ func setSelection(this js.Value, args []js.Value) interface{} {
 	return nil
 }
 
+func setDragOverlay(this js.Value, args []js.Value) interface{} {
+	if len(args) < 1 {
+		return nil
+	}
+	var transforms map[string]document.Transform
+	if err := json.Unmarshal([]byte(args[0].String()), &transforms); err != nil {
+		return nil
+	}
+	eng.SetDragOverlay(transforms)
+	return nil
+}
+
+func updateDragOverlay(this js.Value, args []js.Value) interface{} {
+	if len(args) < 1 {
+		return nil
+	}
+	var transforms map[string]document.Transform
+	if err := json.Unmarshal([]byte(args[0].String()), &transforms); err != nil {
+		return nil
+	}
+	eng.UpdateDragOverlay(transforms)
+	return nil
+}
+
+func clearDragOverlay(this js.Value, args []js.Value) interface{} {
+	eng.ClearDragOverlay()
+	return nil
+}
+
 func tick(this js.Value, args []js.Value) interface{} {
 	return js.ValueOf(eng.Tick())
 }
@@ -171,6 +206,13 @@ func getScene(this js.Value, args []js.Value) interface{} {
 
 func getPlaybackState(this js.Value, args []js.Value) interface{} {
 	return js.ValueOf(eng.GetPlaybackState())
+}
+
+func getAnimatedTransform(this js.Value, args []js.Value) interface{} {
+	if len(args) < 1 {
+		return js.ValueOf("{}")
+	}
+	return js.ValueOf(eng.GetAnimatedTransform(args[0].String()))
 }
 
 func getDocument(this js.Value, args []js.Value) interface{} {

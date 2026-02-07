@@ -190,6 +190,37 @@ export class Stage {
     wasm.setSelection(objectIds);
   }
 
+  /**
+   * Set the drag overlay with initial animated transforms for dragged objects.
+   */
+  setDragOverlay(
+    transforms: Record<string, import("../types/document").Transform>,
+  ): void {
+    if (!this.wasmReady) return;
+    wasm.setDragOverlay(transforms);
+    this.needsRender = true;
+  }
+
+  /**
+   * Update transforms in the active drag overlay during drag move.
+   */
+  updateDragOverlay(
+    transforms: Record<string, import("../types/document").Transform>,
+  ): void {
+    if (!this.wasmReady) return;
+    wasm.updateDragOverlay(transforms);
+    this.needsRender = true;
+  }
+
+  /**
+   * Clear the drag overlay, restoring normal keyframe-evaluated rendering.
+   */
+  clearDragOverlay(): void {
+    if (!this.wasmReady) return;
+    wasm.clearDragOverlay();
+    this.needsRender = true;
+  }
+
   // --- Playback Controls ---
 
   togglePlay(): void {
@@ -269,6 +300,17 @@ export class Stage {
     if (!cmd) return null;
 
     return getWorldBounds(cmd);
+  }
+
+  /**
+   * Get the animated (keyframe-evaluated) transform for an object at the current frame.
+   * Returns the effective transform after keyframe overrides are applied.
+   */
+  getAnimatedTransform(
+    objectId: string,
+  ): { x: number; y: number; sx: number; sy: number; r: number } | null {
+    if (!this.wasmReady) return null;
+    return wasm.getAnimatedTransform(objectId);
   }
 
   /**

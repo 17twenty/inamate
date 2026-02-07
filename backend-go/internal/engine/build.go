@@ -8,9 +8,9 @@ import (
 )
 
 // BuildSceneGraph builds a render-ready scene graph from the document at the given frame.
-// If playing is true, animation keyframes are evaluated and applied to transforms.
-// If playing is false, the document's raw transform values are used (edit mode).
-func BuildSceneGraph(doc *document.InDocument, sceneID string, frame int, rootTimelineID string, playing bool) *SceneGraph {
+// Keyframe overrides are always evaluated. If dragOverlay is non-nil, the specified objects
+// use the overlay transforms instead of document/keyframe values (for drag preview).
+func BuildSceneGraph(doc *document.InDocument, sceneID string, frame int, rootTimelineID string, playing bool, dragOverlay *DragOverlay) *SceneGraph {
 	sg := NewSceneGraph()
 
 	scene, ok := doc.Scenes[sceneID]
@@ -23,11 +23,11 @@ func BuildSceneGraph(doc *document.InDocument, sceneID string, frame int, rootTi
 		return sg
 	}
 
-	// Always evaluate timeline overrides so scrubbing while paused shows animated values
+	// Always evaluate keyframes
 	evalResult := EvaluateTimeline(doc, rootTimelineID, frame)
 
 	// Build the tree starting from root
-	sg.Root = buildNode(doc, &rootObj, nil, Identity(), 1.0, evalResult, frame, sg, playing)
+	sg.Root = buildNode(doc, &rootObj, nil, Identity(), 1.0, evalResult, frame, sg, playing, dragOverlay)
 	sg.Dirty = false
 
 	return sg
@@ -44,6 +44,7 @@ func buildNode(
 	frame int,
 	sg *SceneGraph,
 	playing bool,
+	dragOverlay *DragOverlay,
 ) *SceneNode {
 	if !obj.Visible {
 		return nil
@@ -84,6 +85,13 @@ func buildNode(
 	}
 	if strOverrides, ok := eval.Strings[obj.ID]; ok {
 		style = ApplyStringOverridesToStyle(style, strOverrides)
+	}
+
+	// Apply drag overlay — completely replaces transform for dragged objects
+	if dragOverlay != nil {
+		if overlayT, ok := dragOverlay.Transforms[obj.ID]; ok {
+			transform = overlayT
+		}
 	}
 
 	// Compute local and world transforms
@@ -174,7 +182,7 @@ func buildNode(
 			continue
 		}
 
-		childNode := buildNode(doc, &childObj, node, worldMatrix, opacity, eval, frame, sg, playing)
+		childNode := buildNode(doc, &childObj, node, worldMatrix, opacity, eval, frame, sg, playing, dragOverlay)
 		if childNode != nil {
 			node.Children = append(node.Children, childNode)
 

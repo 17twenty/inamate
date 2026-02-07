@@ -29,6 +29,17 @@ type Engine struct {
 
 	// Dirty flag - scene graph needs rebuild
 	dirty bool
+
+	// Drag overlay — when non-nil, overrides transforms for specific objects during drag
+	dragOverlay *DragOverlay
+}
+
+// DragOverlay holds per-object transform overrides for drag preview rendering.
+// These are absolute transform values that replace the object's transform during
+// rendering, bypassing both document values and keyframe evaluation for the
+// specified objects. Non-listed objects are unaffected.
+type DragOverlay struct {
+	Transforms map[string]document.Transform
 }
 
 // NewEngine creates a new engine instance.
@@ -182,6 +193,32 @@ func (e *Engine) SetSelection(ids []string) {
 	e.selection = ids
 }
 
+// SetDragOverlay sets the drag overlay with absolute transforms for the given objects.
+// Called at drag start. The transforms are the animated positions the objects should render at.
+func (e *Engine) SetDragOverlay(transforms map[string]document.Transform) {
+	e.dragOverlay = &DragOverlay{Transforms: transforms}
+	e.dirty = true
+}
+
+// UpdateDragOverlay updates transforms in the active drag overlay.
+// Called on each drag move with the new positions for dragged objects.
+func (e *Engine) UpdateDragOverlay(transforms map[string]document.Transform) {
+	if e.dragOverlay == nil {
+		return
+	}
+	for id, t := range transforms {
+		e.dragOverlay.Transforms[id] = t
+	}
+	e.dirty = true
+}
+
+// ClearDragOverlay removes the drag overlay, restoring normal rendering.
+// Called at drag end.
+func (e *Engine) ClearDragOverlay() {
+	e.dragOverlay = nil
+	e.dirty = true
+}
+
 // Tick advances the frame if playing and returns draw commands.
 // This is called once per animation frame from the frontend.
 func (e *Engine) Tick() string {
@@ -208,7 +245,8 @@ func (e *Engine) Render() string {
 			e.sceneID,
 			e.frame,
 			e.doc.Project.RootTimeline,
-			e.playing, // Only apply animation overrides when playing
+			e.playing,
+			e.dragOverlay,
 		)
 		e.dirty = false
 	}
@@ -290,6 +328,38 @@ func (e *Engine) GetDocument() string {
 		return "{}"
 	}
 	data, _ := json.Marshal(e.doc)
+	return string(data)
+}
+
+// GetAnimatedTransform returns the animated transform for an object at the current frame.
+// This evaluates keyframe overrides and returns the effective transform values.
+// Used by the frontend to know the visual position before starting a drag.
+func (e *Engine) GetAnimatedTransform(objectID string) string {
+	if e.doc == nil {
+		return "{}"
+	}
+
+	obj, ok := e.doc.Objects[objectID]
+	if !ok {
+		return "{}"
+	}
+
+	// Start with the document transform
+	transform := obj.Transform
+
+	// Evaluate keyframe overrides at the current frame
+	evalResult := EvaluateTimeline(e.doc, e.doc.Project.RootTimeline, e.frame)
+	if numOverrides, ok := evalResult.Numeric[objectID]; ok {
+		transform = ApplyOverridesToTransform(transform, numOverrides)
+	}
+
+	data, _ := json.Marshal(map[string]interface{}{
+		"x":  transform.X,
+		"y":  transform.Y,
+		"sx": transform.SX,
+		"sy": transform.SY,
+		"r":  transform.R,
+	})
 	return string(data)
 }
 

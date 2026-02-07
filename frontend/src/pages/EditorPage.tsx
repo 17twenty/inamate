@@ -31,6 +31,7 @@ import type {
   SymbolData,
   InDocument,
   ObjectNode,
+  Transform,
   Keyframe,
   PathCommand,
   Asset,
@@ -92,11 +93,10 @@ export function EditorPage() {
     dragType: DragType;
     startX: number;
     startY: number;
-    // Original transforms for all dragged objects (for multi-move)
-    origTransforms: Map<
-      string,
-      { x: number; y: number; sx: number; sy: number; r: number }
-    >;
+    // Animated transforms at drag start (visual positions, used for drag math)
+    origTransforms: Map<string, Transform>;
+    // Latest overlay transforms (for reading final position at drag end)
+    lastOverlay: Record<string, Transform>;
     // Bounds at drag start (for scale/rotate calculations, single object only)
     bounds: Bounds | null;
     // Original object dimensions (for scale calculations)
@@ -431,22 +431,35 @@ export function EditorPage() {
       const objectIds =
         dragType === "move" ? [...selectedObjectIds] : [objectId];
 
-      const origTransforms = new Map<
-        string,
-        { x: number; y: number; sx: number; sy: number; r: number }
-      >();
+      // Capture animated transforms (visual positions for drag math)
+      const origTransforms = new Map<string, Transform>();
+      const overlayTransforms: Record<string, Transform> = {};
+
       for (const id of objectIds) {
         const obj = doc.objects[id];
-        if (obj) {
-          origTransforms.set(id, {
-            x: obj.transform.x,
-            y: obj.transform.y,
-            sx: obj.transform.sx,
-            sy: obj.transform.sy,
-            r: obj.transform.r,
-          });
+        if (!obj) continue;
+
+        const animated = stageRef.current.getAnimatedTransform(id);
+        if (animated) {
+          const animTransform: Transform = {
+            ...obj.transform, // preserve ax, ay
+            x: animated.x,
+            y: animated.y,
+            sx: animated.sx,
+            sy: animated.sy,
+            r: animated.r,
+          };
+          origTransforms.set(id, animTransform);
+          overlayTransforms[id] = animTransform;
+        } else {
+          origTransforms.set(id, { ...obj.transform });
+          overlayTransforms[id] = { ...obj.transform };
         }
       }
+
+      // Tell the engine to render dragged objects at their animated positions via overlay
+      // No document mutation — other objects are completely unaffected
+      stageRef.current.setDragOverlay(overlayTransforms);
 
       // Calculate original dimensions from bounds
       let origWidth = 0;
@@ -462,6 +475,7 @@ export function EditorPage() {
         startX: x,
         startY: y,
         origTransforms,
+        lastOverlay: overlayTransforms,
         bounds,
         origWidth,
         origHeight,
@@ -474,255 +488,245 @@ export function EditorPage() {
     const drag = dragRef.current;
     if (!drag) return;
 
-    const store = useEditorStore.getState();
-    const currentDoc = store.document;
-    if (!currentDoc) return;
+    const overlayUpdates: Record<string, Transform> = {};
 
     if (drag.dragType === "move") {
       // Multi-move: apply delta to all dragged objects
       const dx = x - drag.startX;
       const dy = y - drag.startY;
-      const newObjects = { ...currentDoc.objects };
       for (const id of drag.objectIds) {
         const orig = drag.origTransforms.get(id);
-        const obj = newObjects[id];
-        if (orig && obj) {
-          newObjects[id] = {
-            ...obj,
-            transform: { ...obj.transform, x: orig.x + dx, y: orig.y + dy },
-          };
+        if (orig) {
+          overlayUpdates[id] = { ...orig, x: orig.x + dx, y: orig.y + dy };
         }
       }
-      store.setDocument({ ...currentDoc, objects: newObjects });
-      stageRef.current.invalidate();
-      return;
-    }
+    } else {
+      // Scale/rotate: single object only
+      const singleId = drag.objectIds[0];
+      if (!singleId) return;
+      const orig = drag.origTransforms.get(singleId);
+      if (!orig) return;
 
-    // Scale/rotate: single object only
-    const singleId = drag.objectIds[0];
-    if (!singleId) return;
-    const obj = currentDoc.objects[singleId];
-    if (!obj) return;
-    const orig = drag.origTransforms.get(singleId);
-    if (!orig) return;
+      const newTransform = { ...orig };
 
-    let newTransform = { ...obj.transform };
+      if (drag.dragType === "rotate") {
+        // Rotation around object center
+        if (drag.bounds) {
+          const centerX = (drag.bounds.minX + drag.bounds.maxX) / 2;
+          const centerY = (drag.bounds.minY + drag.bounds.maxY) / 2;
 
-    if (drag.dragType === "rotate") {
-      // Rotation around object center
-      if (drag.bounds) {
-        const centerX = (drag.bounds.minX + drag.bounds.maxX) / 2;
-        const centerY = (drag.bounds.minY + drag.bounds.maxY) / 2;
-
-        // Calculate angle from center to current mouse position
-        const startAngle = Math.atan2(
-          drag.startY - centerY,
-          drag.startX - centerX,
-        );
-        const currentAngle = Math.atan2(y - centerY, x - centerX);
-        const deltaAngle = currentAngle - startAngle;
-
-        // Convert to degrees and add to original rotation
-        newTransform.r = orig.r + (deltaAngle * 180) / Math.PI;
-      }
-    } else if (drag.dragType && drag.dragType.startsWith("scale-")) {
-      // Scale from corner handle
-      if (drag.bounds && drag.origWidth > 0 && drag.origHeight > 0) {
-        const { minX, minY, maxX, maxY } = drag.bounds;
-
-        // Check if shift is held (scale from center)
-        const shiftHeld = shiftHeldRef.current;
-
-        if (shiftHeld) {
-          // Shift held: uniform scale from center
-          const centerX = (minX + maxX) / 2;
-          const centerY = (minY + maxY) / 2;
-          const startDist = Math.hypot(
-            drag.startX - centerX,
+          const startAngle = Math.atan2(
             drag.startY - centerY,
+            drag.startX - centerX,
           );
-          const currentDist = Math.hypot(x - centerX, y - centerY);
+          const currentAngle = Math.atan2(y - centerY, x - centerX);
+          const deltaAngle = currentAngle - startAngle;
 
-          if (startDist > 0) {
-            const scaleFactor = currentDist / startDist;
-            newTransform.sx = orig.sx * scaleFactor;
-            newTransform.sy = orig.sy * scaleFactor;
+          newTransform.r = orig.r + (deltaAngle * 180) / Math.PI;
+        }
+      } else if (drag.dragType && drag.dragType.startsWith("scale-")) {
+        // Scale from corner handle
+        if (drag.bounds && drag.origWidth > 0 && drag.origHeight > 0) {
+          const { minX, minY, maxX, maxY } = drag.bounds;
+
+          const shiftHeld = shiftHeldRef.current;
+
+          if (shiftHeld) {
+            // Shift held: uniform scale from center
+            const centerX = (minX + maxX) / 2;
+            const centerY = (minY + maxY) / 2;
+            const startDist = Math.hypot(
+              drag.startX - centerX,
+              drag.startY - centerY,
+            );
+            const currentDist = Math.hypot(x - centerX, y - centerY);
+
+            if (startDist > 0) {
+              const scaleFactor = currentDist / startDist;
+              newTransform.sx = orig.sx * scaleFactor;
+              newTransform.sy = orig.sy * scaleFactor;
+            }
+          } else {
+            // No shift: scale from opposite corner
+            const isDraggingLeft =
+              drag.dragType === "scale-nw" || drag.dragType === "scale-sw";
+            const isDraggingTop =
+              drag.dragType === "scale-nw" || drag.dragType === "scale-ne";
+
+            const fixedX = isDraggingLeft ? maxX : minX;
+            const fixedY = isDraggingTop ? maxY : minY;
+
+            const origDistX = drag.startX - fixedX;
+            const origDistY = drag.startY - fixedY;
+            const curDistX = x - fixedX;
+            const curDistY = y - fixedY;
+
+            const ratioX = Math.abs(origDistX) > 1 ? curDistX / origDistX : 1;
+            const ratioY = Math.abs(origDistY) > 1 ? curDistY / origDistY : 1;
+
+            newTransform.sx = orig.sx * Math.max(0.01, ratioX);
+            newTransform.sy = orig.sy * Math.max(0.01, ratioY);
+
+            const offsetX = (fixedX - orig.x) / orig.sx;
+            const offsetY = (fixedY - orig.y) / orig.sy;
+            newTransform.x = fixedX - offsetX * newTransform.sx;
+            newTransform.y = fixedY - offsetY * newTransform.sy;
           }
-        } else {
-          // No shift: scale from opposite corner
-          // Use ratio of distances from the fixed corner to compute scale,
-          // then adjust position so the fixed corner stays visually pinned.
-
-          const isDraggingLeft =
-            drag.dragType === "scale-nw" || drag.dragType === "scale-sw";
-          const isDraggingTop =
-            drag.dragType === "scale-nw" || drag.dragType === "scale-ne";
-
-          // Fixed corner (opposite to the one being dragged)
-          const fixedX = isDraggingLeft ? maxX : minX;
-          const fixedY = isDraggingTop ? maxY : minY;
-
-          // Original distance from fixed corner to drag start
-          const origDistX = drag.startX - fixedX;
-          const origDistY = drag.startY - fixedY;
-
-          // Current distance from fixed corner to mouse
-          const curDistX = x - fixedX;
-          const curDistY = y - fixedY;
-
-          // Scale ratios (avoid division by zero)
-          const ratioX = Math.abs(origDistX) > 1 ? curDistX / origDistX : 1;
-          const ratioY = Math.abs(origDistY) > 1 ? curDistY / origDistY : 1;
-
-          const newSx = orig.sx * Math.max(0.01, ratioX);
-          const newSy = orig.sy * Math.max(0.01, ratioY);
-
-          newTransform.sx = newSx;
-          newTransform.sy = newSy;
-
-          // Adjust position so the fixed corner stays pinned.
-          // The fixed corner's world position is determined by:
-          //   fixedWorld = objPos + (localCorner - anchor) * scale
-          // We want fixedWorld to remain at (fixedX, fixedY) after scale change.
-          // localCorner for the fixed corner:
-          //   fixedLocalX = isDraggingLeft ? origWidth/origSx : 0  (in unscaled local coords)
-          //   But simpler: fixedX = origX + (fixedLocalX - ax) * origSx
-          //   So fixedLocalX - ax = (fixedX - origX) / origSx
-          // After scale: fixedX_new = newX + (fixedLocalX - ax) * newSx
-          // Set fixedX_new = fixedX:
-          //   newX = fixedX - (fixedLocalX - ax) * newSx
-          //        = fixedX - ((fixedX - origX) / origSx) * newSx
-          const offsetX = (fixedX - orig.x) / orig.sx;
-          const offsetY = (fixedY - orig.y) / orig.sy;
-          newTransform.x = fixedX - offsetX * newSx;
-          newTransform.y = fixedY - offsetY * newSy;
         }
       }
+
+      overlayUpdates[singleId] = newTransform;
     }
 
-    store.setDocument({
-      ...currentDoc,
-      objects: {
-        ...currentDoc.objects,
-        [singleId]: {
-          ...obj,
-          transform: newTransform,
-        },
-      },
-    });
-
-    // Force re-render on next rAF tick without waiting for React
+    // Update overlay and trigger re-render — no document mutation
+    drag.lastOverlay = { ...drag.lastOverlay, ...overlayUpdates };
+    stageRef.current.updateDragOverlay(overlayUpdates);
     stageRef.current.invalidate();
   }, []);
+
+  // Keyframe-aware transform update: when a track exists for a transform property
+  // at the current frame, update/add the keyframe value instead of (or in addition
+  // to) the base document transform. This ensures edits from the Properties panel,
+  // drag handles, and any other source all behave consistently.
+  const updateTransformWithKeyframes = useCallback(
+    (objectId: string, absoluteValues: Record<string, number>): void => {
+      const freshDoc = useEditorStore.getState().document;
+      const frame = stageRef.current.getCurrentFrame();
+      const timelineId = currentContext?.timelineId;
+      if (!freshDoc || !timelineId) return;
+
+      const timeline = freshDoc.timelines[timelineId];
+      if (!timeline) return;
+
+      const handled = new Set<string>();
+
+      for (const [property, value] of Object.entries(absoluteValues)) {
+        const trackId = timeline.tracks.find((tid) => {
+          const track = freshDoc.tracks[tid];
+          return (
+            track && track.objectId === objectId && track.property === property
+          );
+        });
+
+        if (!trackId) continue;
+
+        const track = freshDoc.tracks[trackId];
+        if (!track) continue;
+
+        const existingKeyframeId = track.keys.find((kfId) => {
+          const kf = freshDoc.keyframes[kfId];
+          return kf && kf.frame === frame;
+        });
+
+        if (existingKeyframeId) {
+          commandDispatcher.dispatch({
+            type: "keyframe.update",
+            keyframeId: existingKeyframeId,
+            trackId,
+            changes: { value },
+          });
+        } else {
+          commandDispatcher.dispatch({
+            type: "keyframe.add",
+            trackId,
+            keyframe: {
+              id: crypto.randomUUID(),
+              frame,
+              value,
+              easing: "linear" as const,
+            },
+          });
+        }
+
+        handled.add(property);
+      }
+
+      // Update base document transform for properties NOT handled by keyframes
+      const baseChanges: Record<string, number> = {};
+      for (const [property, value] of Object.entries(absoluteValues)) {
+        if (!handled.has(property)) {
+          // Strip "transform." prefix for dispatch
+          const key = property.replace("transform.", "");
+          baseChanges[key] = value;
+        }
+      }
+      if (Object.keys(baseChanges).length > 0) {
+        commandDispatcher.dispatch({
+          type: "object.transform",
+          objectId,
+          transform: baseChanges,
+        });
+      }
+    },
+    [currentContext],
+  );
 
   const handleDragEnd = useCallback(() => {
     const drag = dragRef.current;
     if (!drag) return;
 
-    const currentDoc = useEditorStore.getState().document;
-    if (!currentDoc) {
-      dragRef.current = null;
-      return;
-    }
-
     if (drag.dragType === "move") {
-      // Multi-move: collect final transforms, reset all, then dispatch
-      const finals = new Map<string, { x: number; y: number }>();
       for (const id of drag.objectIds) {
-        const obj = currentDoc.objects[id];
-        const orig = drag.origTransforms.get(id);
-        if (
-          obj &&
-          orig &&
-          (obj.transform.x !== orig.x || obj.transform.y !== orig.y)
-        ) {
-          finals.set(id, { x: obj.transform.x, y: obj.transform.y });
-        }
-      }
+        const animOrig = drag.origTransforms.get(id);
+        const final = drag.lastOverlay[id];
+        if (!animOrig || !final) continue;
 
-      if (finals.size > 0) {
-        // Reset all to originals in one setDocument
-        const resetObjects = { ...currentDoc.objects };
-        for (const [id, orig] of drag.origTransforms) {
-          const obj = resetObjects[id];
-          if (obj) {
-            resetObjects[id] = {
-              ...obj,
-              transform: { ...obj.transform, x: orig.x, y: orig.y },
-            };
-          }
-        }
-        useEditorStore
-          .getState()
-          .setDocument({ ...currentDoc, objects: resetObjects });
+        const dx = final.x - animOrig.x;
+        const dy = final.y - animOrig.y;
+        if (dx === 0 && dy === 0) continue;
 
-        // Dispatch individual transform ops
-        for (const [id, final] of finals) {
-          commandDispatcher.dispatch({
-            type: "object.transform",
-            objectId: id,
-            transform: { x: final.x, y: final.y },
-          });
-        }
+        // Use absolute final animated values — the shared helper handles
+        // keyframe update vs base transform dispatch automatically
+        const updates: Record<string, number> = {};
+        if (dx !== 0) updates["transform.x"] = final.x;
+        if (dy !== 0) updates["transform.y"] = final.y;
+        updateTransformWithKeyframes(id, updates);
       }
     } else {
       // Scale/rotate: single object
       const singleId = drag.objectIds[0];
-      const obj = currentDoc.objects[singleId];
-      const orig = drag.origTransforms.get(singleId);
-      if (!obj || !orig) {
+      const animOrig = drag.origTransforms.get(singleId);
+      const final = drag.lastOverlay[singleId];
+      if (!animOrig || !final) {
         dragRef.current = null;
+        stageRef.current.clearDragOverlay();
         return;
       }
 
-      const ft = obj.transform;
       const hasChanged =
-        ft.x !== orig.x ||
-        ft.y !== orig.y ||
-        ft.sx !== orig.sx ||
-        ft.sy !== orig.sy ||
-        ft.r !== orig.r;
+        final.x !== animOrig.x ||
+        final.y !== animOrig.y ||
+        final.sx !== animOrig.sx ||
+        final.sy !== animOrig.sy ||
+        final.r !== animOrig.r;
 
       if (hasChanged) {
-        // Reset to original
-        useEditorStore.getState().setDocument({
-          ...currentDoc,
-          objects: {
-            ...currentDoc.objects,
-            [singleId]: {
-              ...obj,
-              transform: {
-                ...obj.transform,
-                x: orig.x,
-                y: orig.y,
-                sx: orig.sx,
-                sy: orig.sy,
-                r: orig.r,
-              },
-            },
-          },
-        });
-
-        const transformChanges: Record<string, number> = {};
+        const updates: Record<string, number> = {};
         if (drag.dragType === "rotate") {
-          transformChanges.r = ft.r;
+          updates["transform.r"] = final.r;
         } else if (drag.dragType && drag.dragType.startsWith("scale-")) {
-          transformChanges.sx = ft.sx;
-          transformChanges.sy = ft.sy;
-          if (ft.x !== orig.x) transformChanges.x = ft.x;
-          if (ft.y !== orig.y) transformChanges.y = ft.y;
+          updates["transform.sx"] = final.sx;
+          updates["transform.sy"] = final.sy;
+          if (final.x !== animOrig.x) updates["transform.x"] = final.x;
+          if (final.y !== animOrig.y) updates["transform.y"] = final.y;
         }
-
-        commandDispatcher.dispatch({
-          type: "object.transform",
-          objectId: singleId,
-          transform: transformChanges,
-        });
+        updateTransformWithKeyframes(singleId, updates);
       }
     }
 
+    // Dispatch updates the Zustand store synchronously, but the useEffect([doc])
+    // that syncs to WASM fires asynchronously. Push the updated doc to WASM now
+    // so that when we clear the overlay, the engine already has the new transforms.
+    const updatedDoc = useEditorStore.getState().document;
+    if (updatedDoc) {
+      stageRef.current.updateDocument(updatedDoc);
+    }
+
+    // Now safe to clear — WASM has the new document with correct transforms
+    stageRef.current.clearDragOverlay();
+
     dragRef.current = null;
-  }, []);
+  }, [updateTransformWithKeyframes]);
 
   // --- Playback controls (delegated to Stage) ---
 
@@ -1016,11 +1020,16 @@ export function EditorPage() {
       },
     ) => {
       if (changes.transform) {
-        commandDispatcher.dispatch({
-          type: "object.transform",
-          objectId,
-          transform: changes.transform,
-        });
+        // Build absolute property values for keyframe-aware update
+        const propertyValues: Record<string, number> = {};
+        for (const [key, value] of Object.entries(changes.transform)) {
+          if (typeof value === "number") {
+            propertyValues[`transform.${key}`] = value;
+          }
+        }
+        if (Object.keys(propertyValues).length > 0) {
+          updateTransformWithKeyframes(objectId, propertyValues);
+        }
       }
       if (changes.style) {
         commandDispatcher.dispatch({
@@ -1030,7 +1039,7 @@ export function EditorPage() {
         });
       }
     },
-    [],
+    [updateTransformWithKeyframes],
   );
 
   // --- Object creation ---
@@ -1380,7 +1389,32 @@ export function EditorPage() {
       const obj = freshDoc.objects[objectId];
       if (!obj) return;
 
-      const value = getPropertyValue(obj, property);
+      // Use the animated (visual) value for transform properties so that
+      // recording a keyframe captures what the user sees on screen, not the
+      // raw document base value which may differ from the interpolated position.
+      let value: number | string = getPropertyValue(obj, property);
+      if (property.startsWith("transform.")) {
+        const animated = stageRef.current.getAnimatedTransform(objectId);
+        if (animated) {
+          switch (property) {
+            case "transform.x":
+              value = animated.x;
+              break;
+            case "transform.y":
+              value = animated.y;
+              break;
+            case "transform.sx":
+              value = animated.sx;
+              break;
+            case "transform.sy":
+              value = animated.sy;
+              break;
+            case "transform.r":
+              value = animated.r;
+              break;
+          }
+        }
+      }
 
       // Find existing track for this object/property
       const trackId = timeline.tracks.find((tid) => {

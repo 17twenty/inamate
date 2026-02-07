@@ -26,6 +26,9 @@ interface InamateEngine {
   togglePlay(): void;
   setScene(sceneId: string): void;
   setSelection(ids: string[]): void;
+  setDragOverlay(json: string): void;
+  updateDragOverlay(json: string): void;
+  clearDragOverlay(): void;
   tick(): string;
 
   // Queries (frontend ← backend)
@@ -34,6 +37,7 @@ interface InamateEngine {
   getSelectionBounds(): string;
   getScene(): string;
   getPlaybackState(): string;
+  getAnimatedTransform(objectId: string): string;
   getDocument(): string;
   getSelection(): string;
   getFrame(): number;
@@ -188,6 +192,22 @@ export function setSelection(ids: string[]): void {
   getEngine().setSelection(ids);
 }
 
+export function setDragOverlay(
+  transforms: Record<string, import("../types/document").Transform>,
+): void {
+  getEngine().setDragOverlay(JSON.stringify(transforms));
+}
+
+export function updateDragOverlay(
+  transforms: Record<string, import("../types/document").Transform>,
+): void {
+  getEngine().updateDragOverlay(JSON.stringify(transforms));
+}
+
+export function clearDragOverlay(): void {
+  getEngine().clearDragOverlay();
+}
+
 export function tick(): DrawCommand[] {
   const json = getEngine().tick();
   return JSON.parse(json) as DrawCommand[];
@@ -229,6 +249,19 @@ export interface PlaybackState {
 export function getPlaybackState(): PlaybackState {
   const json = getEngine().getPlaybackState();
   return JSON.parse(json) as PlaybackState;
+}
+
+export interface AnimatedTransform {
+  x: number;
+  y: number;
+  sx: number;
+  sy: number;
+  r: number;
+}
+
+export function getAnimatedTransform(objectId: string): AnimatedTransform {
+  const json = getEngine().getAnimatedTransform(objectId);
+  return JSON.parse(json) as AnimatedTransform;
 }
 
 export function getDocument(): InDocument {
