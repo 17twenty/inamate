@@ -427,7 +427,12 @@ export class Stage {
       const showHandles = this.selectedObjectIds.length === 1;
       for (const id of this.selectedObjectIds) {
         const cmd = this.lastCommands.find((c) => c.objectId === id);
-        if (cmd) {
+        if (!cmd) {
+          console.warn(
+            `[Stage] No draw command found for selected object ${id}. Commands:`,
+            this.lastCommands.map((c) => c.objectId),
+          );
+        } else {
           renderSelectionOutline(this.ctx, cmd, showHandles);
         }
       }

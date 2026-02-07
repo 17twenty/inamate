@@ -584,23 +584,26 @@ export function EditorPage() {
     stageRef.current.invalidate();
   }, []);
 
-  // Keyframe-aware transform update: when a track exists for a transform property
-  // at the current frame, update/add the keyframe value instead of (or in addition
-  // to) the base document transform. This ensures edits from the Properties panel,
-  // drag handles, and any other source all behave consistently.
-  const updateTransformWithKeyframes = useCallback(
-    (objectId: string, absoluteValues: Record<string, number>): void => {
+  // Keyframe-aware property update: when a track exists for a property at the
+  // current frame, update/add the keyframe value instead of (or in addition to)
+  // the base document value. This ensures edits from the Properties panel, drag
+  // handles, and any other source all behave consistently for both transform and
+  // style properties.
+  const updateWithKeyframes = useCallback(
+    (
+      objectId: string,
+      propertyValues: Record<string, number | string>,
+    ): Set<string> => {
       const freshDoc = useEditorStore.getState().document;
       const frame = stageRef.current.getCurrentFrame();
       const timelineId = currentContext?.timelineId;
-      if (!freshDoc || !timelineId) return;
+      const handled = new Set<string>();
+      if (!freshDoc || !timelineId) return handled;
 
       const timeline = freshDoc.timelines[timelineId];
-      if (!timeline) return;
+      if (!timeline) return handled;
 
-      const handled = new Set<string>();
-
-      for (const [property, value] of Object.entries(absoluteValues)) {
+      for (const [property, value] of Object.entries(propertyValues)) {
         const trackId = timeline.tracks.find((tid) => {
           const track = freshDoc.tracks[tid];
           return (
@@ -641,11 +644,20 @@ export function EditorPage() {
         handled.add(property);
       }
 
+      return handled;
+    },
+    [currentContext],
+  );
+
+  // Convenience wrapper for transform-only updates (used by drag handlers)
+  const updateTransformWithKeyframes = useCallback(
+    (objectId: string, absoluteValues: Record<string, number>): void => {
+      const handled = updateWithKeyframes(objectId, absoluteValues);
+
       // Update base document transform for properties NOT handled by keyframes
       const baseChanges: Record<string, number> = {};
       for (const [property, value] of Object.entries(absoluteValues)) {
         if (!handled.has(property)) {
-          // Strip "transform." prefix for dispatch
           const key = property.replace("transform.", "");
           baseChanges[key] = value;
         }
@@ -658,7 +670,7 @@ export function EditorPage() {
         });
       }
     },
-    [currentContext],
+    [updateWithKeyframes],
   );
 
   const handleDragEnd = useCallback(() => {
@@ -1020,7 +1032,6 @@ export function EditorPage() {
       },
     ) => {
       if (changes.transform) {
-        // Build absolute property values for keyframe-aware update
         const propertyValues: Record<string, number> = {};
         for (const [key, value] of Object.entries(changes.transform)) {
           if (typeof value === "number") {
@@ -1032,14 +1043,30 @@ export function EditorPage() {
         }
       }
       if (changes.style) {
-        commandDispatcher.dispatch({
-          type: "object.style",
-          objectId,
-          style: changes.style,
-        });
+        // Build keyframe-aware property values for style changes
+        const propertyValues: Record<string, number | string> = {};
+        for (const [key, value] of Object.entries(changes.style)) {
+          propertyValues[`style.${key}`] = value;
+        }
+        const handled = updateWithKeyframes(objectId, propertyValues);
+
+        // Update base document style for properties NOT handled by keyframes
+        const baseChanges: Record<string, number | string> = {};
+        for (const [key, value] of Object.entries(changes.style)) {
+          if (!handled.has(`style.${key}`)) {
+            baseChanges[key] = value;
+          }
+        }
+        if (Object.keys(baseChanges).length > 0) {
+          commandDispatcher.dispatch({
+            type: "object.style",
+            objectId,
+            style: baseChanges,
+          });
+        }
       }
     },
-    [updateTransformWithKeyframes],
+    [updateTransformWithKeyframes, updateWithKeyframes],
   );
 
   // --- Object creation ---
