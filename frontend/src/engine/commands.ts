@@ -67,6 +67,65 @@ export type HandleType =
   | null;
 
 /**
+ * Clear the canvas and draw the background.
+ */
+export function clearAndDrawBackground(
+  ctx: CanvasRenderingContext2D,
+  background: string | undefined,
+  dpr: number = 1,
+): void {
+  ctx.save();
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);
+  if (background) {
+    ctx.fillStyle = background;
+    ctx.fillRect(0, 0, ctx.canvas.width, ctx.canvas.height);
+  }
+  ctx.restore();
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+}
+
+/**
+ * Execute draw commands without clearing the canvas first.
+ */
+export function executeCommandsNoClear(
+  ctx: CanvasRenderingContext2D,
+  commands: DrawCommand[],
+  dpr: number = 1,
+  assets?: Record<string, Asset>,
+): void {
+  if (assets) {
+    currentAssets = assets;
+  }
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+  for (const cmd of commands) {
+    switch (cmd.op) {
+      case "save":
+        ctx.save();
+        break;
+      case "restore":
+        ctx.restore();
+        break;
+      case "clip":
+        if (cmd.path && cmd.transform) {
+          ctx.save();
+          applyTransform(ctx, cmd.transform);
+          const clipPath = buildPath(cmd.path);
+          ctx.clip(clipPath);
+        }
+        break;
+      case "path":
+        drawPath(ctx, cmd);
+        break;
+      case "image":
+        drawImage(ctx, cmd);
+        break;
+    }
+  }
+}
+
+/**
  * Execute a list of draw commands on a Canvas2D context.
  * @param ctx - The canvas rendering context
  * @param commands - Draw commands from WASM engine
@@ -80,51 +139,8 @@ export function executeCommands(
   dpr: number = 1,
   assets?: Record<string, Asset>,
 ): void {
-  if (assets) {
-    currentAssets = assets;
-  }
-  // Clear canvas at full resolution
-  ctx.save();
-  ctx.setTransform(1, 0, 0, 1, 0, 0);
-  ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);
-  if (background) {
-    ctx.fillStyle = background;
-    ctx.fillRect(0, 0, ctx.canvas.width, ctx.canvas.height);
-  }
-  ctx.restore();
-
-  // Set up DPR scaling for all subsequent drawing
-  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-
-  // Execute each command
-  for (const cmd of commands) {
-    switch (cmd.op) {
-      case "save":
-        ctx.save();
-        break;
-
-      case "restore":
-        ctx.restore();
-        break;
-
-      case "clip":
-        if (cmd.path && cmd.transform) {
-          ctx.save();
-          applyTransform(ctx, cmd.transform);
-          const clipPath = buildPath(cmd.path);
-          ctx.clip(clipPath);
-        }
-        break;
-
-      case "path":
-        drawPath(ctx, cmd);
-        break;
-
-      case "image":
-        drawImage(ctx, cmd);
-        break;
-    }
-  }
+  clearAndDrawBackground(ctx, background, dpr);
+  executeCommandsNoClear(ctx, commands, dpr, assets);
 }
 
 /**

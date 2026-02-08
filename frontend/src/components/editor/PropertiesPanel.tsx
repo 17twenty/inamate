@@ -141,6 +141,7 @@ function ObjectProperties({
   onDataUpdate,
 }: ObjectPropertiesProps) {
   const { transform, style } = object;
+  const isLocked = object.locked;
 
   const handleTransformChange = useCallback(
     (field: keyof Transform, value: number) => {
@@ -162,6 +163,13 @@ function ObjectProperties({
         Properties
       </h3>
 
+      {/* Locked indicator */}
+      {isLocked && (
+        <div className="mb-3 rounded bg-yellow-900/30 border border-yellow-700/50 px-2 py-1.5 text-xs text-yellow-400">
+          Locked
+        </div>
+      )}
+
       {/* Object info */}
       <div className="mb-3 border-b border-gray-800 pb-3">
         <span className="text-xs text-gray-400">{object.type}</span>
@@ -177,24 +185,28 @@ function ObjectProperties({
           value={transform.x.toFixed(1)}
           onChange={(v) => handleTransformChange("x", parseFloat(v) || 0)}
           type="number"
+          disabled={isLocked}
         />
         <EditablePropRow
           label="Y"
           value={transform.y.toFixed(1)}
           onChange={(v) => handleTransformChange("y", parseFloat(v) || 0)}
           type="number"
+          disabled={isLocked}
         />
         <EditablePropRow
           label="Scale X"
           value={transform.sx.toFixed(2)}
           onChange={(v) => handleTransformChange("sx", parseFloat(v) || 1)}
           type="number"
+          disabled={isLocked}
         />
         <EditablePropRow
           label="Scale Y"
           value={transform.sy.toFixed(2)}
           onChange={(v) => handleTransformChange("sy", parseFloat(v) || 1)}
           type="number"
+          disabled={isLocked}
         />
         <EditablePropRow
           label="Rotation"
@@ -203,30 +215,35 @@ function ObjectProperties({
             handleTransformChange("r", ((parseFloat(v) || 0) * Math.PI) / 180)
           }
           type="number"
+          disabled={isLocked}
         />
         <EditablePropRow
           label="Skew X"
           value={(transform.skewX ?? 0).toFixed(1)}
           onChange={(v) => handleTransformChange("skewX", parseFloat(v) || 0)}
           type="number"
+          disabled={isLocked}
         />
         <EditablePropRow
           label="Skew Y"
           value={(transform.skewY ?? 0).toFixed(1)}
           onChange={(v) => handleTransformChange("skewY", parseFloat(v) || 0)}
           type="number"
+          disabled={isLocked}
         />
         <EditablePropRow
           label="Anchor X"
           value={transform.ax.toFixed(1)}
           onChange={(v) => handleTransformChange("ax", parseFloat(v) || 0)}
           type="number"
+          disabled={isLocked}
         />
         <EditablePropRow
           label="Anchor Y"
           value={transform.ay.toFixed(1)}
           onChange={(v) => handleTransformChange("ay", parseFloat(v) || 0)}
           type="number"
+          disabled={isLocked}
         />
       </Section>
 
@@ -240,6 +257,7 @@ function ObjectProperties({
               onDataUpdate?.(object.id, { width: parseFloat(v) || 0 })
             }
             type="number"
+            disabled={isLocked}
           />
           <EditablePropRow
             label="Height"
@@ -248,6 +266,7 @@ function ObjectProperties({
               onDataUpdate?.(object.id, { height: parseFloat(v) || 0 })
             }
             type="number"
+            disabled={isLocked}
           />
         </Section>
       )}
@@ -260,6 +279,7 @@ function ObjectProperties({
               onDataUpdate?.(object.id, { rx: parseFloat(v) || 0 })
             }
             type="number"
+            disabled={isLocked}
           />
           <EditablePropRow
             label="Radius Y"
@@ -268,6 +288,7 @@ function ObjectProperties({
               onDataUpdate?.(object.id, { ry: parseFloat(v) || 0 })
             }
             type="number"
+            disabled={isLocked}
           />
         </Section>
       )}
@@ -298,6 +319,7 @@ function ObjectProperties({
             handleStyleChange("fill", none ? "none" : "#000000")
           }
           onChange={(v) => handleStyleChange("fill", v)}
+          disabled={isLocked}
         />
         <ColorPropRow
           label="Stroke"
@@ -309,12 +331,14 @@ function ObjectProperties({
             handleStyleChange("stroke", none ? "none" : "#000000")
           }
           onChange={(v) => handleStyleChange("stroke", v)}
+          disabled={isLocked}
         />
         <EditablePropRow
           label="Stroke W"
           value={style.strokeWidth.toFixed(1)}
           onChange={(v) => handleStyleChange("strokeWidth", parseFloat(v) || 0)}
           type="number"
+          disabled={isLocked}
         />
         <EditablePropRow
           label="Opacity"
@@ -326,6 +350,7 @@ function ObjectProperties({
             )
           }
           type="number"
+          disabled={isLocked}
         />
       </Section>
     </div>
@@ -354,11 +379,13 @@ function EditablePropRow({
   value,
   onChange,
   type = "text",
+  disabled = false,
 }: {
   label: string;
   value: string | number;
   onChange: (value: string) => void;
   type?: "text" | "number";
+  disabled?: boolean;
 }) {
   return (
     <div className="mb-1 flex items-center justify-between">
@@ -368,7 +395,8 @@ function EditablePropRow({
         value={value}
         onChange={(e) => onChange(e.target.value)}
         onKeyDown={(e) => e.stopPropagation()}
-        className="w-20 rounded border border-gray-700 bg-gray-800 px-1.5 py-0.5 text-right text-xs text-gray-300 focus:border-blue-500 focus:outline-none"
+        disabled={disabled}
+        className={`w-20 rounded border border-gray-700 bg-gray-800 px-1.5 py-0.5 text-right text-xs text-gray-300 focus:border-blue-500 focus:outline-none ${disabled ? "opacity-50 cursor-not-allowed" : ""}`}
       />
     </div>
   );
@@ -380,18 +408,21 @@ function ColorPropRow({
   onChange,
   isNone = false,
   onToggleNone,
+  disabled = false,
 }: {
   label: string;
   value: string;
   onChange: (value: string) => void;
   isNone?: boolean;
   onToggleNone?: (none: boolean) => void;
+  disabled?: boolean;
 }) {
   return (
     <div className="mb-1.5 flex items-center gap-2">
       {onToggleNone && (
         <button
           onClick={() => onToggleNone(!isNone)}
+          disabled={disabled}
           title={
             isNone
               ? `Enable ${label.toLowerCase()}`
@@ -401,7 +432,7 @@ function ColorPropRow({
             isNone
               ? "border-gray-600 bg-gray-700 text-gray-500"
               : "border-transparent text-transparent"
-          }`}
+          } ${disabled ? "opacity-50 cursor-not-allowed" : ""}`}
         >
           {isNone ? "∅" : ""}
         </button>
@@ -410,8 +441,8 @@ function ColorPropRow({
         type="color"
         value={value}
         onChange={(e) => onChange(e.target.value)}
-        className={`h-5 w-5 cursor-pointer rounded border border-gray-700 bg-transparent ${isNone ? "opacity-30" : ""}`}
-        disabled={isNone}
+        className={`h-5 w-5 cursor-pointer rounded border border-gray-700 bg-transparent ${isNone || disabled ? "opacity-30" : ""}`}
+        disabled={isNone || disabled}
       />
       <span className="text-xs text-gray-400">{label}</span>
       <input
@@ -419,8 +450,8 @@ function ColorPropRow({
         value={isNone ? "none" : value}
         onChange={(e) => onChange(e.target.value)}
         onKeyDown={(e) => e.stopPropagation()}
-        className={`ml-auto w-16 rounded border border-gray-700 bg-gray-800 px-1 py-0.5 text-right text-xs text-gray-500 focus:border-blue-500 focus:outline-none ${isNone ? "italic opacity-50" : ""}`}
-        disabled={isNone}
+        className={`ml-auto w-16 rounded border border-gray-700 bg-gray-800 px-1 py-0.5 text-right text-xs text-gray-500 focus:border-blue-500 focus:outline-none ${isNone || disabled ? "italic opacity-50" : ""}`}
+        disabled={isNone || disabled}
       />
     </div>
   );

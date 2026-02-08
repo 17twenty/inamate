@@ -4,6 +4,8 @@
 
 import JSZip from "jszip";
 import type { Stage } from "../engine/Stage";
+import type { InDocument } from "../types/document";
+import { RUNTIME_JS } from "../engine/runtime";
 
 export interface ExportProgress {
   current: number;
@@ -176,6 +178,104 @@ export async function exportVideo(
   const link = document.createElement("a");
   link.href = URL.createObjectURL(resultBlob);
   link.download = `${safeName}.${format}`;
+  link.click();
+  URL.revokeObjectURL(link.href);
+}
+
+/**
+ * Prepare document for standalone export: convert asset URLs to base64 data URLs.
+ */
+async function prepareDocumentForExport(doc: InDocument): Promise<InDocument> {
+  const exportDoc = JSON.parse(JSON.stringify(doc)) as InDocument;
+
+  // Convert asset URLs to data URLs for portability
+  for (const assetId of Object.keys(exportDoc.assets)) {
+    const asset = exportDoc.assets[assetId];
+    if (asset.url && !asset.url.startsWith("data:")) {
+      try {
+        const resp = await fetch(asset.url);
+        const blob = await resp.blob();
+        const dataUrl = await new Promise<string>((resolve) => {
+          const reader = new FileReader();
+          reader.onloadend = () => resolve(reader.result as string);
+          reader.readAsDataURL(blob);
+        });
+        asset.url = dataUrl;
+      } catch {
+        // Keep original URL if fetch fails
+      }
+    }
+  }
+
+  return exportDoc;
+}
+
+/**
+ * Export animation as a standalone HTML file in a zip package.
+ */
+export async function exportHTML(
+  doc: InDocument,
+  onProgress?: (progress: ExportProgress) => void,
+): Promise<void> {
+  const safeName =
+    doc.project.name
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-|-$/g, "") || "animation";
+
+  // Phase 1: Prepare document with embedded assets
+  onProgress?.({ current: 1, total: 3, phase: "rendering" });
+  const exportDoc = await prepareDocumentForExport(doc);
+
+  // Phase 2: Generate files
+  onProgress?.({ current: 2, total: 3, phase: "zipping" });
+
+  const scene = exportDoc.scenes[exportDoc.project.scenes[0]];
+  const projectJson = JSON.stringify(exportDoc);
+
+  const indexHtml = `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>${doc.project.name}</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: #1a1a1a; display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 100vh; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+  canvas { border: 1px solid #333; max-width: 90vw; max-height: 80vh; object-fit: contain; }
+  .controls { display: flex; align-items: center; gap: 12px; margin-top: 12px; color: #999; font-size: 13px; }
+  button { background: #333; color: #ccc; border: 1px solid #555; border-radius: 4px; padding: 6px 16px; cursor: pointer; font-size: 13px; }
+  button:hover { background: #444; color: #fff; }
+  input[type="range"] { width: 200px; accent-color: #6366f1; }
+  #frame-label { min-width: 80px; text-align: center; font-variant-numeric: tabular-nums; }
+  .title { color: #666; font-size: 11px; margin-bottom: 8px; }
+</style>
+</head>
+<body>
+<div class="title">Created with Inamate</div>
+<canvas id="animation-canvas" width="${scene?.width || 1280}" height="${scene?.height || 720}"></canvas>
+<div class="controls">
+  <button id="play-btn">Play</button>
+  <input type="range" id="scrubber" min="0" value="0" />
+  <span id="frame-label">0 / 0</span>
+</div>
+<script>window.__INAMATE_PROJECT__ = ${projectJson};</script>
+<script src="runtime.js"></script>
+</body>
+</html>`;
+
+  const zip = new JSZip();
+  zip.file("index.html", indexHtml);
+  zip.file("runtime.js", RUNTIME_JS);
+
+  const blob = await zip.generateAsync({ type: "blob" });
+
+  // Phase 3: Download
+  onProgress?.({ current: 3, total: 3, phase: "downloading" });
+
+  const link = document.createElement("a");
+  link.href = URL.createObjectURL(blob);
+  link.download = `${safeName}-html.zip`;
   link.click();
   URL.revokeObjectURL(link.href);
 }

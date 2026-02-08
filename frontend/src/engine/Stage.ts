@@ -7,6 +7,8 @@ import type {
 } from "./commands";
 import {
   executeCommands,
+  clearAndDrawBackground,
+  executeCommandsNoClear,
   renderSelectionOutline,
   renderAnchorPoint,
   renderSubselectionOverlay,
@@ -58,6 +60,13 @@ export class Stage {
 
   // Device pixel ratio for high-DPI displays
   private dpr = 1;
+
+  // Onion skin state
+  private onionSkinEnabled = false;
+  private onionSkinBefore = 2;
+  private onionSkinAfter = 1;
+  private offscreenCanvas: HTMLCanvasElement | null = null;
+  private offscreenCtx: CanvasRenderingContext2D | null = null;
 
   // Subselection state (managed externally by CanvasViewport)
   private subselectionAnchors: AnchorPoint[] | null = null;
@@ -278,6 +287,16 @@ export class Stage {
   }
 
   /**
+   * Configure onion skin rendering.
+   */
+  setOnionSkin(enabled: boolean, before = 2, after = 1): void {
+    this.onionSkinEnabled = enabled;
+    this.onionSkinBefore = before;
+    this.onionSkinAfter = after;
+    this.needsRender = true;
+  }
+
+  /**
    * Force a re-render (e.g., during drag operations).
    */
   invalidate(): void {
@@ -493,17 +512,118 @@ export class Stage {
     setImageLoadedCallback(null);
   }
 
+  private renderWithOnionSkin(): void {
+    if (!this.ctx || !this.scene) return;
+
+    this.ensureOffscreenCanvas();
+    if (!this.offscreenCtx) return;
+
+    const currentFrame = wasm.getFrame();
+    const totalFrames = wasm.getTotalFrames();
+
+    // 1. Clear main canvas + draw background once
+    clearAndDrawBackground(this.ctx, this.scene.background, this.dpr);
+
+    // 2. Collect onion frames (furthest first so closer frames draw on top)
+    const onionFrames: {
+      frame: number;
+      isBefore: boolean;
+      distance: number;
+    }[] = [];
+
+    for (let d = this.onionSkinBefore; d >= 1; d--) {
+      const f = currentFrame - d;
+      if (f >= 0) onionFrames.push({ frame: f, isBefore: true, distance: d });
+    }
+    for (let d = this.onionSkinAfter; d >= 1; d--) {
+      const f = currentFrame + d;
+      if (f < totalFrames)
+        onionFrames.push({ frame: f, isBefore: false, distance: d });
+    }
+
+    // 3. Render each onion frame to offscreen, tint, composite onto main
+    for (const { frame, isBefore, distance } of onionFrames) {
+      // Seek and render at the onion frame
+      wasm.setPlayhead(frame);
+      const cmds = wasm.render();
+      if (!cmds || cmds.length === 0) continue;
+
+      // Clear offscreen and draw commands
+      const oCtx = this.offscreenCtx;
+      oCtx.save();
+      oCtx.setTransform(1, 0, 0, 1, 0, 0);
+      oCtx.clearRect(
+        0,
+        0,
+        this.offscreenCanvas!.width,
+        this.offscreenCanvas!.height,
+      );
+      oCtx.restore();
+
+      executeCommandsNoClear(oCtx, cmds, this.dpr, this.assets);
+
+      // Apply color tint via source-atop compositing
+      oCtx.save();
+      oCtx.setTransform(1, 0, 0, 1, 0, 0);
+      oCtx.globalCompositeOperation = "source-atop";
+      oCtx.fillStyle = isBefore
+        ? "rgba(60, 120, 255, 0.6)" // blue for previous frames
+        : "rgba(255, 120, 40, 0.6)"; // orange for next frames
+      oCtx.fillRect(
+        0,
+        0,
+        this.offscreenCanvas!.width,
+        this.offscreenCanvas!.height,
+      );
+      oCtx.restore();
+
+      // Composite onto main canvas with fading alpha
+      const maxDist = Math.max(this.onionSkinBefore, this.onionSkinAfter);
+      const alpha = 0.3 - (distance - 1) * (0.15 / Math.max(1, maxDist - 1));
+      this.ctx.save();
+      this.ctx.setTransform(1, 0, 0, 1, 0, 0);
+      this.ctx.globalAlpha = Math.max(0.1, alpha);
+      this.ctx.drawImage(this.offscreenCanvas!, 0, 0);
+      this.ctx.restore();
+    }
+
+    // 4. Restore playhead and draw current frame on top
+    wasm.setPlayhead(currentFrame);
+    // lastCommands already has the current frame's commands
+    executeCommandsNoClear(this.ctx, this.lastCommands, this.dpr, this.assets);
+  }
+
+  private ensureOffscreenCanvas(): void {
+    if (!this.canvas) return;
+    if (
+      !this.offscreenCanvas ||
+      this.offscreenCanvas.width !== this.canvas.width ||
+      this.offscreenCanvas.height !== this.canvas.height
+    ) {
+      this.offscreenCanvas = document.createElement("canvas");
+      this.offscreenCanvas.width = this.canvas.width;
+      this.offscreenCanvas.height = this.canvas.height;
+      this.offscreenCtx = this.offscreenCanvas.getContext("2d");
+    }
+  }
+
   private render(): void {
     if (!this.ctx || !this.scene) return;
 
-    // Execute draw commands with DPR scaling for crisp rendering on high-DPI displays
-    executeCommands(
-      this.ctx,
-      this.lastCommands,
-      this.scene.background,
-      this.dpr,
-      this.assets,
-    );
+    const shouldOnionSkin = this.onionSkinEnabled && !wasm.isPlaying();
+
+    if (shouldOnionSkin) {
+      this.renderWithOnionSkin();
+    } else {
+      // Normal rendering path
+      executeCommands(
+        this.ctx,
+        this.lastCommands,
+        this.scene.background,
+        this.dpr,
+        this.assets,
+      );
+    }
 
     // Render selection outlines
     if (this.selectedObjectIds.length > 0) {

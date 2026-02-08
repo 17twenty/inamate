@@ -47,6 +47,13 @@ interface TimelinePanelProps {
   onCreateScene?: () => void;
   onDeleteScene?: (id: string) => void;
   onRenameScene?: (id: string, name: string) => void;
+  // Layer management
+  onToggleVisibility?: (objectId: string) => void;
+  onToggleLocked?: (objectId: string) => void;
+  onReorderObject?: (objectId: string, newIndex: number) => void;
+  // Onion skin
+  onionSkinEnabled?: boolean;
+  onToggleOnionSkin?: () => void;
 }
 
 // Easing options for the context menu
@@ -131,6 +138,11 @@ export function TimelinePanel({
   onCreateScene,
   onDeleteScene,
   onRenameScene,
+  onToggleVisibility,
+  onToggleLocked,
+  onReorderObject,
+  onionSkinEnabled,
+  onToggleOnionSkin,
 }: TimelinePanelProps) {
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const [panelHeight, setPanelHeight] = useState(192);
@@ -160,6 +172,10 @@ export function TimelinePanel({
       return next;
     });
   }, []);
+
+  // Layer drag-to-reorder state
+  const [draggingLayerId, setDraggingLayerId] = useState<string | null>(null);
+  const [dropTargetIndex, setDropTargetIndex] = useState<number | null>(null);
 
   // Keyframe drag state
   const [draggingKeyframe, setDraggingKeyframe] = useState<{
@@ -681,7 +697,28 @@ export function TimelinePanel({
           </button>
         )}
 
-        <span className="ml-auto text-xs text-gray-600">{fps} fps</span>
+        {/* Onion skin toggle */}
+        {onToggleOnionSkin && (
+          <button
+            onClick={onToggleOnionSkin}
+            className={`ml-auto px-2 py-0.5 text-xs rounded ${
+              onionSkinEnabled
+                ? "bg-purple-600 text-white"
+                : "bg-gray-700 text-gray-500 hover:text-gray-300"
+            }`}
+            title={
+              onionSkinEnabled ? "Disable onion skin" : "Enable onion skin"
+            }
+          >
+            Onion
+          </button>
+        )}
+
+        <span
+          className={`${onToggleOnionSkin ? "" : "ml-auto"} text-xs text-gray-600`}
+        >
+          {fps} fps
+        </span>
       </div>
 
       {/* Timeline body - single scrollable area */}
@@ -744,19 +781,170 @@ export function TimelinePanel({
 
               return (
                 <React.Fragment key={obj.id}>
-                  {/* Object row (parent) */}
-                  <div className="flex" style={{ height: ROW_HEIGHT }}>
-                    {/* Layer name - sticky left */}
+                  {/* Drop indicator above first row */}
+                  {dropTargetIndex === 0 && layerObjects.indexOf(obj) === 0 && (
                     <div
+                      className="h-0.5 bg-blue-500"
+                      style={{
+                        marginLeft: 0,
+                        width: LAYER_NAME_WIDTH + gridWidth,
+                      }}
+                    />
+                  )}
+
+                  {/* Object row (parent) */}
+                  <div
+                    className="flex"
+                    style={{ height: ROW_HEIGHT }}
+                    onDragOver={(e) => {
+                      if (!draggingLayerId || draggingLayerId === obj.id)
+                        return;
+                      e.preventDefault();
+                      e.dataTransfer.dropEffect = "move";
+                      const rect = e.currentTarget.getBoundingClientRect();
+                      const midY = rect.top + rect.height / 2;
+                      const idx = layerObjects.indexOf(obj);
+                      setDropTargetIndex(e.clientY < midY ? idx : idx + 1);
+                    }}
+                    onDrop={(e) => {
+                      e.preventDefault();
+                      if (
+                        draggingLayerId &&
+                        dropTargetIndex !== null &&
+                        onReorderObject
+                      ) {
+                        onReorderObject(draggingLayerId, dropTargetIndex);
+                      }
+                      setDraggingLayerId(null);
+                      setDropTargetIndex(null);
+                    }}
+                  >
+                    {/* Layer name - sticky left, draggable for reorder */}
+                    <div
+                      draggable={!!onReorderObject}
+                      onDragStart={(e) => {
+                        setDraggingLayerId(obj.id);
+                        e.dataTransfer.effectAllowed = "move";
+                        e.dataTransfer.setData("text/plain", obj.id);
+                      }}
+                      onDragEnd={() => {
+                        setDraggingLayerId(null);
+                        setDropTargetIndex(null);
+                      }}
                       onClick={() => onSelectObject(isSelected ? [] : [obj.id])}
                       onDoubleClick={() => handleLayerDoubleClick(obj.id)}
                       className={`sticky left-0 z-10 flex flex-shrink-0 cursor-pointer items-center border-b border-r border-gray-800/50 bg-gray-900 px-1 text-xs ${
                         isSelected
                           ? "bg-blue-900/30 text-blue-300"
                           : "text-gray-400 hover:bg-gray-800/50"
-                      }`}
+                      } ${!obj.visible ? "opacity-40" : ""} ${obj.locked ? "italic" : ""}`}
                       style={{ width: LAYER_NAME_WIDTH }}
                     >
+                      {/* Visibility toggle */}
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onToggleVisibility?.(obj.id);
+                        }}
+                        className={`mr-0.5 w-4 h-4 flex items-center justify-center hover:text-gray-300 ${obj.visible ? "text-gray-400" : "text-gray-600"}`}
+                        title={obj.visible ? "Hide" : "Show"}
+                      >
+                        <svg
+                          width="10"
+                          height="10"
+                          viewBox="0 0 10 10"
+                          fill="currentColor"
+                        >
+                          {obj.visible ? (
+                            <>
+                              <ellipse
+                                cx="5"
+                                cy="5"
+                                rx="4.5"
+                                ry="2.5"
+                                fill="none"
+                                stroke="currentColor"
+                                strokeWidth="1"
+                              />
+                              <circle cx="5" cy="5" r="1.5" />
+                            </>
+                          ) : (
+                            <>
+                              <ellipse
+                                cx="5"
+                                cy="5"
+                                rx="4.5"
+                                ry="2.5"
+                                fill="none"
+                                stroke="currentColor"
+                                strokeWidth="1"
+                                opacity="0.4"
+                              />
+                              <line
+                                x1="1"
+                                y1="9"
+                                x2="9"
+                                y2="1"
+                                stroke="currentColor"
+                                strokeWidth="1"
+                                opacity="0.6"
+                              />
+                            </>
+                          )}
+                        </svg>
+                      </button>
+                      {/* Lock toggle */}
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onToggleLocked?.(obj.id);
+                        }}
+                        className={`mr-0.5 w-4 h-4 flex items-center justify-center hover:text-gray-300 ${obj.locked ? "text-yellow-500" : "text-gray-600"}`}
+                        title={obj.locked ? "Unlock" : "Lock"}
+                      >
+                        <svg
+                          width="10"
+                          height="10"
+                          viewBox="0 0 10 10"
+                          fill="currentColor"
+                        >
+                          {obj.locked ? (
+                            <>
+                              <rect
+                                x="1.5"
+                                y="5"
+                                width="7"
+                                height="4.5"
+                                rx="0.5"
+                              />
+                              <path
+                                d="M3 5V3.5a2 2 0 0 1 4 0V5"
+                                fill="none"
+                                stroke="currentColor"
+                                strokeWidth="1"
+                              />
+                            </>
+                          ) : (
+                            <>
+                              <rect
+                                x="1.5"
+                                y="5"
+                                width="7"
+                                height="4.5"
+                                rx="0.5"
+                                opacity="0.3"
+                              />
+                              <path
+                                d="M3 5V3.5a2 2 0 0 1 4 0"
+                                fill="none"
+                                stroke="currentColor"
+                                strokeWidth="1"
+                                opacity="0.4"
+                              />
+                            </>
+                          )}
+                        </svg>
+                      </button>
                       <button
                         onClick={(e) => {
                           e.stopPropagation();
@@ -931,6 +1119,17 @@ export function TimelinePanel({
                         </div>
                       );
                     })}
+
+                  {/* Drop indicator after this row */}
+                  {dropTargetIndex !== null &&
+                    dropTargetIndex === layerObjects.indexOf(obj) + 1 && (
+                      <div
+                        className="h-0.5 bg-blue-500"
+                        style={{
+                          width: LAYER_NAME_WIDTH + gridWidth,
+                        }}
+                      />
+                    )}
                 </React.Fragment>
               );
             })}

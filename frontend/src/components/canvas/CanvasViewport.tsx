@@ -69,6 +69,8 @@ interface CanvasViewportProps {
   // Subselection (direct select)
   selectedObjects?: Record<string, ObjectNode>;
   onDataUpdate?: (objectId: string, data: Record<string, unknown>) => void;
+  // All document objects (for locked checks)
+  docObjects?: Record<string, ObjectNode>;
 }
 
 const MIN_ZOOM = 0.1;
@@ -95,6 +97,7 @@ export function CanvasViewport({
   onMarqueeSelect,
   selectedObjects,
   onDataUpdate,
+  docObjects,
 }: CanvasViewportProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const penOverlayRef = useRef<HTMLCanvasElement>(null);
@@ -441,9 +444,9 @@ export function CanvasViewport({
                 setSubselectedPoints(new Set([hit.index]));
               }
             }
-            // Start dragging the point/handle
+            // Start dragging the point/handle (blocked for locked objects)
             const obj = selectedObjects?.[selectedObjectIds[0]];
-            if (obj && obj.type === "VectorPath") {
+            if (obj && obj.type === "VectorPath" && !obj.locked) {
               const data = obj.data as VectorPathData;
               isDraggingRef.current = true;
               dragTypeRef.current = "move"; // reuse move drag tracking
@@ -491,6 +494,8 @@ export function CanvasViewport({
       ) {
         const hitId = stage.hitTest(x, y);
         if (hitId && selectedObjectIds.includes(hitId)) {
+          // Block shear on locked objects
+          if (docObjects?.[hitId]?.locked) return;
           isDraggingRef.current = true;
           dragTypeRef.current = "shear";
           const bounds = stage.getSelectedObjectBounds();
@@ -530,6 +535,8 @@ export function CanvasViewport({
       // Check for anchor point hit first (only when single object selected)
       if (selectedObjectIds.length === 1 && onDragStart) {
         if (stage.hitTestAnchorPoint(x, y)) {
+          // Block anchor drag on locked objects
+          if (docObjects?.[selectedObjectIds[0]]?.locked) return;
           isDraggingRef.current = true;
           dragTypeRef.current = "anchor";
           const bounds = stage.getSelectedObjectBounds();
@@ -542,6 +549,8 @@ export function CanvasViewport({
       if (selectedObjectIds.length === 1 && onDragStart) {
         const handleType = stage.hitTestHandle(x, y);
         if (handleType) {
+          // Block scale/rotate on locked objects
+          if (docObjects?.[selectedObjectIds[0]]?.locked) return;
           isDraggingRef.current = true;
           dragTypeRef.current = handleType;
           const bounds = stage.getSelectedObjectBounds();
@@ -560,6 +569,11 @@ export function CanvasViewport({
         onDragStart &&
         !e.shiftKey
       ) {
+        // Block move if any selected object is locked
+        const anyLocked = selectedObjectIds.some(
+          (id) => docObjects?.[id]?.locked,
+        );
+        if (anyLocked) return;
         isDraggingRef.current = true;
         dragTypeRef.current = "move";
         const bounds = stage.getSelectedObjectBounds();

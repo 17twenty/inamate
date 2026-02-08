@@ -17,7 +17,7 @@ import { TimelinePanel } from "../components/editor/TimelinePanel";
 import type { BreadcrumbEntry } from "../components/editor/TimelinePanel";
 import { MenuBar } from "../components/editor/MenuBar";
 import { getLatestSnapshot } from "../api/projects";
-import { exportPngSequence, exportVideo } from "../utils/export";
+import { exportPngSequence, exportVideo, exportHTML } from "../utils/export";
 
 import { MessageTypes } from "../types/protocol";
 import type { Message } from "../types/protocol";
@@ -72,6 +72,7 @@ export function EditorPage() {
     phase: string;
   } | null>(null);
   const [toast, setToast] = useState<string | null>(null);
+  const [onionSkinEnabled, setOnionSkinEnabled] = useState(false);
 
   // Editing context stack for nested Symbol editing
   const [editingStack, setEditingStack] = useState<EditingContext[]>([]);
@@ -818,7 +819,12 @@ export function EditorPage() {
 
   const handleDeleteObject = useCallback(() => {
     if (selectedObjectIds.length === 0) return;
-    for (const id of selectedObjectIds) {
+    const freshDoc = useEditorStore.getState().document;
+    const deletable = selectedObjectIds.filter(
+      (id) => !freshDoc?.objects[id]?.locked,
+    );
+    if (deletable.length === 0) return;
+    for (const id of deletable) {
       commandDispatcher.dispatch({
         type: "object.delete",
         objectId: id,
@@ -1303,6 +1309,8 @@ export function EditorPage() {
 
       const width = maxX - minX;
       const height = maxY - minY;
+      const ax = width / 2;
+      const ay = height / 2;
 
       const objectId = crypto.randomUUID();
       const newObject: ObjectNode = {
@@ -1311,13 +1319,13 @@ export function EditorPage() {
         parent: scene.root,
         children: [],
         transform: {
-          x: minX,
-          y: minY,
+          x: minX + ax,
+          y: minY + ay,
           sx: 1,
           sy: 1,
           r: 0,
-          ax: width / 2,
-          ay: height / 2,
+          ax,
+          ay,
           skewX: 0,
           skewY: 0,
         },
@@ -1693,6 +1701,58 @@ export function EditorPage() {
     [],
   );
 
+  // --- Layer panel handlers (visibility, lock, reorder) ---
+
+  const handleToggleVisibility = useCallback((objectId: string) => {
+    const freshDoc = useEditorStore.getState().document;
+    if (!freshDoc) return;
+    const obj = freshDoc.objects[objectId];
+    if (!obj) return;
+    commandDispatcher.dispatch({
+      type: "object.visibility",
+      objectId,
+      visible: !obj.visible,
+    });
+  }, []);
+
+  const handleToggleLocked = useCallback((objectId: string) => {
+    const freshDoc = useEditorStore.getState().document;
+    if (!freshDoc) return;
+    const obj = freshDoc.objects[objectId];
+    if (!obj) return;
+    commandDispatcher.dispatch({
+      type: "object.locked",
+      objectId,
+      locked: !obj.locked,
+    });
+  }, []);
+
+  const handleReorderObject = useCallback(
+    (objectId: string, newIndex: number) => {
+      const freshDoc = useEditorStore.getState().document;
+      if (!freshDoc) return;
+      const obj = freshDoc.objects[objectId];
+      if (!obj?.parent) return;
+      commandDispatcher.dispatch({
+        type: "object.reparent",
+        objectId,
+        newParentId: obj.parent,
+        newIndex,
+      });
+    },
+    [],
+  );
+
+  // --- Onion skin toggle ---
+
+  const handleToggleOnionSkin = useCallback(() => {
+    setOnionSkinEnabled((prev) => {
+      const next = !prev;
+      stageRef.current.setOnionSkin(next, 2, 1);
+      return next;
+    });
+  }, []);
+
   // --- Z-Order handlers ---
 
   const handleBringToFront = useCallback(() => {
@@ -2028,6 +2088,17 @@ export function EditorPage() {
     [doc, scene, selectedObjectIds, currentFrame, totalFrames],
   );
 
+  const handleExportHTML = useCallback(async () => {
+    if (!doc) return;
+    try {
+      await exportHTML(doc, (p) => setExportProgress(p));
+    } catch (error) {
+      console.error("HTML export failed:", error);
+    } finally {
+      setExportProgress(null);
+    }
+  }, [doc]);
+
   const selectedObject = useMemo(() => {
     if (!doc || !singleSelectedId) return null;
     return doc.objects[singleSelectedId] || null;
@@ -2113,6 +2184,7 @@ export function EditorPage() {
         onExportMp4={() => handleExportVideo("mp4")}
         onExportGif={() => handleExportVideo("gif")}
         onExportWebm={() => handleExportVideo("webm")}
+        onExportHTML={handleExportHTML}
         isExporting={exportProgress !== null}
         onZoomIn={handleZoomIn}
         onZoomOut={handleZoomOut}
@@ -2163,6 +2235,7 @@ export function EditorPage() {
             onMarqueeSelect={handleMarqueeSelect}
             selectedObjects={selectedObjectsMap}
             onDataUpdate={handleDataUpdate}
+            docObjects={doc.objects}
           />
         </div>
 
@@ -2208,6 +2281,11 @@ export function EditorPage() {
           onCreateScene={handleCreateScene}
           onDeleteScene={handleDeleteScene}
           onRenameScene={handleRenameScene}
+          onToggleVisibility={handleToggleVisibility}
+          onToggleLocked={handleToggleLocked}
+          onReorderObject={handleReorderObject}
+          onionSkinEnabled={onionSkinEnabled}
+          onToggleOnionSkin={handleToggleOnionSkin}
         />
       )}
 
