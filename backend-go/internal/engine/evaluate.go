@@ -2,6 +2,7 @@ package engine
 
 import (
 	"encoding/json"
+	"math"
 	"sort"
 	"strings"
 
@@ -187,22 +188,80 @@ func parseKeyframeValue(raw json.RawMessage) *float64 {
 func applyEasing(t float64, easing document.EasingType) float64 {
 	switch easing {
 	case document.EasingEaseIn:
-		// Quadratic ease-in: t^2
 		return t * t
 
 	case document.EasingEaseOut:
-		// Quadratic ease-out: 1 - (1-t)^2 = t(2-t)
 		return t * (2 - t)
 
 	case document.EasingEaseInOut:
-		// Quadratic ease-in-out
 		if t < 0.5 {
 			return 2 * t * t
 		}
 		return -1 + (4-2*t)*t
 
+	case document.EasingCubicIn:
+		return t * t * t
+
+	case document.EasingCubicOut:
+		t2 := 1 - t
+		return 1 - t2*t2*t2
+
+	case document.EasingCubicInOut:
+		if t < 0.5 {
+			return 4 * t * t * t
+		}
+		t2 := -2*t + 2
+		return 1 - t2*t2*t2/2
+
+	case document.EasingBackIn:
+		c1 := 1.70158
+		c3 := c1 + 1
+		return c3*t*t*t - c1*t*t
+
+	case document.EasingBackOut:
+		c1 := 1.70158
+		c3 := c1 + 1
+		t2 := t - 1
+		return 1 + c3*t2*t2*t2 + c1*t2*t2
+
+	case document.EasingBackInOut:
+		c1 := 1.70158
+		c2 := c1 * 1.525
+		if t < 0.5 {
+			return (math.Pow(2*t, 2) * ((c2+1)*2*t - c2)) / 2
+		}
+		return (math.Pow(2*t-2, 2)*((c2+1)*(t*2-2)+c2) + 2) / 2
+
+	case document.EasingElasticOut:
+		if t == 0 || t == 1 {
+			return t
+		}
+		c4 := (2 * math.Pi) / 3
+		return math.Pow(2, -10*t)*math.Sin((t*10-0.75)*c4) + 1
+
+	case document.EasingBounceOut:
+		return bounceOut(t)
+
 	default: // linear
 		return t
+	}
+}
+
+// bounceOut implements the standard 4-segment parabolic bounce curve.
+func bounceOut(t float64) float64 {
+	n1 := 7.5625
+	d1 := 2.75
+	if t < 1/d1 {
+		return n1 * t * t
+	} else if t < 2/d1 {
+		t -= 1.5 / d1
+		return n1*t*t + 0.75
+	} else if t < 2.5/d1 {
+		t -= 2.25 / d1
+		return n1*t*t + 0.9375
+	} else {
+		t -= 2.625 / d1
+		return n1*t*t + 0.984375
 	}
 }
 
@@ -230,6 +289,12 @@ func ApplyOverridesToTransform(base document.Transform, overrides PropertyOverri
 	}
 	if v, ok := overrides["transform.ay"]; ok {
 		result.AY = v
+	}
+	if v, ok := overrides["transform.skewX"]; ok {
+		result.SkewX = v
+	}
+	if v, ok := overrides["transform.skewY"]; ok {
+		result.SkewY = v
 	}
 
 	return result

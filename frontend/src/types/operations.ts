@@ -75,6 +75,13 @@ export interface SetLockedOp extends BaseOperation {
   previous?: boolean; // For undo
 }
 
+export interface UpdateDataOp extends BaseOperation {
+  type: "object.data";
+  objectId: string;
+  data: Record<string, unknown>;
+  previous?: Record<string, unknown>; // For undo
+}
+
 // --- Track Operations ---
 
 export interface CreateTrackOp extends BaseOperation {
@@ -184,6 +191,7 @@ export type Operation =
   | ReparentObjectOp
   | SetVisibilityOp
   | SetLockedOp
+  | UpdateDataOp
   | CreateTrackOp
   | DeleteTrackOp
   | AddKeyframeOp

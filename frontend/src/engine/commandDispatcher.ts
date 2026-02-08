@@ -22,6 +22,7 @@ import type {
   ReparentObjectOp,
   SetVisibilityOp,
   SetLockedOp,
+  UpdateDataOp,
   CreateTrackOp,
   DeleteTrackOp,
   UpdateTimelineOp,
@@ -308,6 +309,23 @@ class CommandDispatcher {
         break;
       }
 
+      case "object.data": {
+        const obj = doc.objects[op.objectId];
+        if (obj) {
+          // Capture only the fields being changed
+          const previous: Record<string, unknown> = {};
+          const objData = obj.data as Record<string, unknown>;
+          for (const key of Object.keys(op.data)) {
+            previous[key] = objData[key];
+          }
+          return {
+            ...op,
+            previous,
+          } as UpdateDataOp;
+        }
+        break;
+      }
+
       case "scene.update": {
         const scene = doc.scenes[op.sceneId];
         if (scene) {
@@ -488,6 +506,16 @@ class CommandDispatcher {
           id: crypto.randomUUID(),
           locked: op.previous,
           previous: op.locked,
+        };
+      }
+
+      case "object.data": {
+        if (!op.previous) return null;
+        return {
+          ...op,
+          id: crypto.randomUUID(),
+          data: op.previous,
+          previous: op.data,
         };
       }
 
@@ -747,6 +775,22 @@ class CommandDispatcher {
           objects: {
             ...doc.objects,
             [op.objectId]: { ...obj, locked: op.locked },
+          },
+        });
+        break;
+      }
+
+      case "object.data": {
+        const obj = doc.objects[op.objectId];
+        if (!obj) return;
+        store.setDocument({
+          ...doc,
+          objects: {
+            ...doc.objects,
+            [op.objectId]: {
+              ...obj,
+              data: { ...(obj.data as Record<string, unknown>), ...op.data },
+            },
           },
         });
         break;

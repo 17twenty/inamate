@@ -45,6 +45,8 @@ export interface Transform {
   r: number;
   ax: number;
   ay: number;
+  skewX: number;
+  skewY: number;
 }
 
 export interface Style {
@@ -116,7 +118,19 @@ export interface Track {
   keys: string[];
 }
 
-export type EasingType = "linear" | "easeIn" | "easeOut" | "easeInOut";
+export type EasingType =
+  | "linear"
+  | "easeIn"
+  | "easeOut"
+  | "easeInOut"
+  | "cubicIn"
+  | "cubicOut"
+  | "cubicInOut"
+  | "backIn"
+  | "backOut"
+  | "backInOut"
+  | "elasticOut"
+  | "bounceOut";
 
 export interface Keyframe {
   id: string;

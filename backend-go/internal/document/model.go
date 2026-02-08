@@ -45,13 +45,15 @@ const (
 )
 
 type Transform struct {
-	X  float64 `json:"x"`
-	Y  float64 `json:"y"`
-	SX float64 `json:"sx"`
-	SY float64 `json:"sy"`
-	R  float64 `json:"r"`
-	AX float64 `json:"ax"`
-	AY float64 `json:"ay"`
+	X     float64 `json:"x"`
+	Y     float64 `json:"y"`
+	SX    float64 `json:"sx"`
+	SY    float64 `json:"sy"`
+	R     float64 `json:"r"`
+	AX    float64 `json:"ax"`
+	AY    float64 `json:"ay"`
+	SkewX float64 `json:"skewX"`
+	SkewY float64 `json:"skewY"`
 }
 
 type Style struct {
@@ -89,10 +91,18 @@ type Track struct {
 type EasingType string
 
 const (
-	EasingLinear    EasingType = "linear"
-	EasingEaseIn    EasingType = "easeIn"
-	EasingEaseOut   EasingType = "easeOut"
-	EasingEaseInOut EasingType = "easeInOut"
+	EasingLinear     EasingType = "linear"
+	EasingEaseIn     EasingType = "easeIn"
+	EasingEaseOut    EasingType = "easeOut"
+	EasingEaseInOut  EasingType = "easeInOut"
+	EasingCubicIn    EasingType = "cubicIn"
+	EasingCubicOut   EasingType = "cubicOut"
+	EasingCubicInOut EasingType = "cubicInOut"
+	EasingBackIn     EasingType = "backIn"
+	EasingBackOut    EasingType = "backOut"
+	EasingBackInOut  EasingType = "backInOut"
+	EasingElasticOut EasingType = "elasticOut"
+	EasingBounceOut  EasingType = "bounceOut"
 )
 
 type Keyframe struct {
@@ -152,7 +162,7 @@ func NewEmptyDocument(projectID, projectName, sceneID, rootID, timelineID string
 				Parent:   nil,
 				Children: []string{},
 				Transform: Transform{
-					X: 0, Y: 0, SX: 1, SY: 1, R: 0, AX: 0, AY: 0,
+					X: 0, Y: 0, SX: 1, SY: 1, R: 0, AX: 0, AY: 0, SkewX: 0, SkewY: 0,
 				},
 				Style: Style{
 					Fill: "", Stroke: "", StrokeWidth: 0, Opacity: 1,

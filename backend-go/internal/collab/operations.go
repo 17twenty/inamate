@@ -83,6 +83,8 @@ func (ds *DocumentState) applyOperationLocked(op Operation) error {
 		return ds.applyVisibility(op)
 	case "object.locked":
 		return ds.applyLocked(op)
+	case "object.data":
+		return ds.applyData(op)
 	case "timeline.update":
 		return ds.applyTimelineUpdate(op)
 	case "scene.update":
@@ -141,6 +143,12 @@ func (ds *DocumentState) applyTransform(op Operation) error {
 	}
 	if v, ok := changes["ay"]; ok {
 		obj.Transform.AY = v
+	}
+	if v, ok := changes["skewX"]; ok {
+		obj.Transform.SkewX = v
+	}
+	if v, ok := changes["skewY"]; ok {
+		obj.Transform.SkewY = v
 	}
 
 	ds.doc.Objects[op.ObjectID] = obj
@@ -318,6 +326,40 @@ func (ds *DocumentState) applyLocked(op Operation) error {
 		obj.Locked = *op.Locked
 	}
 
+	ds.doc.Objects[op.ObjectID] = obj
+	return nil
+}
+
+func (ds *DocumentState) applyData(op Operation) error {
+	obj, ok := ds.doc.Objects[op.ObjectID]
+	if !ok {
+		return fmt.Errorf("object not found: %s", op.ObjectID)
+	}
+
+	// Merge changes into existing data
+	var existing map[string]interface{}
+	if len(obj.Data) > 0 {
+		if err := json.Unmarshal(obj.Data, &existing); err != nil {
+			existing = make(map[string]interface{})
+		}
+	} else {
+		existing = make(map[string]interface{})
+	}
+
+	var changes map[string]interface{}
+	if err := json.Unmarshal(op.Data, &changes); err != nil {
+		return fmt.Errorf("invalid data: %w", err)
+	}
+
+	for k, v := range changes {
+		existing[k] = v
+	}
+
+	merged, err := json.Marshal(existing)
+	if err != nil {
+		return fmt.Errorf("failed to marshal data: %w", err)
+	}
+	obj.Data = merged
 	ds.doc.Objects[op.ObjectID] = obj
 	return nil
 }

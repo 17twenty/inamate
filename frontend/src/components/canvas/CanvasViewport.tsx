@@ -7,11 +7,25 @@ import {
 } from "react";
 import type { Stage } from "../../engine/Stage";
 import type { Tool } from "../editor/Toolbar";
-import type { Bounds, HandleType } from "../../engine/commands";
-import type { PathCommand } from "../../types/document";
+import type {
+  Bounds,
+  HandleType,
+  SubselectionHit,
+} from "../../engine/commands";
+import type {
+  PathCommand,
+  ObjectNode,
+  VectorPathData,
+} from "../../types/document";
+import type { AnchorPoint } from "../../engine/pathUtils";
+import {
+  pathToAnchors,
+  anchorsToPath,
+  isPathClosed,
+} from "../../engine/pathUtils";
 import { CursorOverlay } from "./CursorOverlay";
 
-export type DragType = "move" | HandleType;
+export type DragType = "move" | "shear" | "anchor" | HandleType;
 
 // Pen tool point with optional bezier handles (absolute coordinates)
 export interface PenPoint {
@@ -52,6 +66,9 @@ interface CanvasViewportProps {
     maxX: number;
     maxY: number;
   }) => void;
+  // Subselection (direct select)
+  selectedObjects?: Record<string, ObjectNode>;
+  onDataUpdate?: (objectId: string, data: Record<string, unknown>) => void;
 }
 
 const MIN_ZOOM = 0.1;
@@ -76,6 +93,8 @@ export function CanvasViewport({
   onCreateObject,
   onCreatePath,
   onMarqueeSelect,
+  selectedObjects,
+  onDataUpdate,
 }: CanvasViewportProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const penOverlayRef = useRef<HTMLCanvasElement>(null);
@@ -105,6 +124,20 @@ export function CanvasViewport({
     height: number;
   } | null>(null);
 
+  // Subselection state
+  const [subselectedPoints, setSubselectedPoints] = useState<Set<number>>(
+    new Set(),
+  );
+  const [subselectionAnchors, setSubselectionAnchors] = useState<
+    AnchorPoint[] | null
+  >(null);
+  const subselDragRef = useRef<{
+    hit: SubselectionHit;
+    objectId: string;
+    origAnchors: AnchorPoint[];
+    closed: boolean;
+  } | null>(null);
+
   // Bezier handle drag state
   const pendingPointRef = useRef<PenPoint | null>(null);
   const penMouseDownRef = useRef(false);
@@ -113,6 +146,41 @@ export function CanvasViewport({
     x: number;
     y: number;
   } | null>(null);
+
+  // Parse anchors when subselect tool is active and a VectorPath is selected
+  useEffect(() => {
+    if (
+      activeTool === "subselect" &&
+      selectedObjectIds.length === 1 &&
+      selectedObjects
+    ) {
+      const obj = selectedObjects[selectedObjectIds[0]];
+      if (obj && obj.type === "VectorPath") {
+        const data = obj.data as VectorPathData;
+        if (data.commands) {
+          const anchors = pathToAnchors(data.commands);
+          setSubselectionAnchors(anchors);
+          stage.setSubselection(obj.id, anchors, subselectedPoints);
+          return;
+        }
+      }
+    }
+    // Clear when not applicable
+    setSubselectionAnchors(null);
+    setSubselectedPoints(new Set());
+    stage.clearSubselection();
+  }, [activeTool, selectedObjectIds, selectedObjects, stage]);
+
+  // Sync subselected points to Stage
+  useEffect(() => {
+    if (subselectionAnchors && selectedObjectIds.length === 1) {
+      stage.setSubselection(
+        selectedObjectIds[0],
+        subselectionAnchors,
+        subselectedPoints,
+      );
+    }
+  }, [subselectedPoints, subselectionAnchors, selectedObjectIds, stage]);
 
   // Attach canvas to Stage on mount
   useEffect(() => {
@@ -325,7 +393,111 @@ export function CanvasViewport({
         return;
       }
 
+      // Zoom tool: click to zoom in, alt+click to zoom out
+      if (activeTool === "zoom") {
+        const container = containerRef.current;
+        if (!container) return;
+        const rect = container.getBoundingClientRect();
+        const mouseX = e.clientX - rect.left;
+        const mouseY = e.clientY - rect.top;
+
+        const zoomFactor = e.altKey ? 1 / 1.5 : 1.5;
+        const newZoom = Math.min(
+          MAX_ZOOM,
+          Math.max(MIN_ZOOM, zoom * zoomFactor),
+        );
+        const zoomRatio = newZoom / zoom;
+
+        const newPanX = mouseX - (mouseX - pan.x) * zoomRatio;
+        const newPanY = mouseY - (mouseY - pan.y) * zoomRatio;
+
+        setZoom(newZoom);
+        setPan({ x: newPanX, y: newPanY });
+        return;
+      }
+
       const { x, y } = viewportToScene(e);
+
+      // Subselect tool: handle anchor/handle clicking and dragging
+      if (activeTool === "subselect") {
+        // If we have subselection anchors, check for point/handle hits
+        if (subselectionAnchors && selectedObjectIds.length === 1) {
+          const hit = stage.hitTestSubselection(x, y);
+          if (hit) {
+            // Select the anchor point
+            if (hit.type === "anchor") {
+              if (e.shiftKey) {
+                // Toggle selection
+                setSubselectedPoints((prev) => {
+                  const next = new Set(prev);
+                  if (next.has(hit.index)) {
+                    next.delete(hit.index);
+                  } else {
+                    next.add(hit.index);
+                  }
+                  return next;
+                });
+              } else {
+                setSubselectedPoints(new Set([hit.index]));
+              }
+            }
+            // Start dragging the point/handle
+            const obj = selectedObjects?.[selectedObjectIds[0]];
+            if (obj && obj.type === "VectorPath") {
+              const data = obj.data as VectorPathData;
+              isDraggingRef.current = true;
+              dragTypeRef.current = "move"; // reuse move drag tracking
+              subselDragRef.current = {
+                hit,
+                objectId: obj.id,
+                origAnchors: subselectionAnchors.map((a) => ({
+                  ...a,
+                  handleIn: a.handleIn ? { ...a.handleIn } : undefined,
+                  handleOut: a.handleOut ? { ...a.handleOut } : undefined,
+                })),
+                closed: isPathClosed(data.commands),
+              };
+              // Store drag start for delta calculation
+              panStartRef.current = {
+                x: e.clientX,
+                y: e.clientY,
+                panX: x,
+                panY: y,
+              };
+            }
+            return;
+          }
+        }
+
+        // No subselection hit — try to select an object
+        const hitId = stage.hitTest(x, y);
+        if (hitId) {
+          onObjectClick?.(hitId, e.shiftKey);
+          setSubselectedPoints(new Set());
+          return;
+        }
+
+        // Clicked empty space — deselect
+        onObjectClick?.(null, false);
+        setSubselectedPoints(new Set());
+        return;
+      }
+
+      // Shear tool: start shear drag on selected object
+      if (
+        activeTool === "shear" &&
+        selectedObjectIds.length === 1 &&
+        onDragStart
+      ) {
+        const hitId = stage.hitTest(x, y);
+        if (hitId && selectedObjectIds.includes(hitId)) {
+          isDraggingRef.current = true;
+          dragTypeRef.current = "shear";
+          const bounds = stage.getSelectedObjectBounds();
+          onDragStart(hitId, x, y, "shear", bounds);
+          return;
+        }
+      }
 
       // Creation tools (shapes)
       if (
@@ -355,7 +527,18 @@ export function CanvasViewport({
         return;
       }
 
-      // Check for handle hits first (only when single object selected)
+      // Check for anchor point hit first (only when single object selected)
+      if (selectedObjectIds.length === 1 && onDragStart) {
+        if (stage.hitTestAnchorPoint(x, y)) {
+          isDraggingRef.current = true;
+          dragTypeRef.current = "anchor";
+          const bounds = stage.getSelectedObjectBounds();
+          onDragStart(selectedObjectIds[0], x, y, "anchor", bounds);
+          return;
+        }
+      }
+
+      // Check for handle hits (only when single object selected)
       if (selectedObjectIds.length === 1 && onDragStart) {
         const handleType = stage.hitTestHandle(x, y);
         if (handleType) {
@@ -444,6 +627,58 @@ export function CanvasViewport({
         return;
       }
 
+      // Handle subselection point/handle dragging
+      if (isDraggingRef.current && subselDragRef.current) {
+        const sd = subselDragRef.current;
+        const dx = x - panStartRef.current.panX;
+        const dy = y - panStartRef.current.panY;
+
+        // Clone original anchors and apply delta
+        const newAnchors = sd.origAnchors.map((a) => ({
+          ...a,
+          handleIn: a.handleIn ? { ...a.handleIn } : undefined,
+          handleOut: a.handleOut ? { ...a.handleOut } : undefined,
+        }));
+
+        const target = newAnchors[sd.hit.index];
+        if (target) {
+          if (sd.hit.type === "anchor") {
+            const orig = sd.origAnchors[sd.hit.index];
+            target.x = orig.x + dx;
+            target.y = orig.y + dy;
+            // Move handles with the anchor
+            if (orig.handleIn) {
+              target.handleIn = {
+                x: orig.handleIn.x + dx,
+                y: orig.handleIn.y + dy,
+              };
+            }
+            if (orig.handleOut) {
+              target.handleOut = {
+                x: orig.handleOut.x + dx,
+                y: orig.handleOut.y + dy,
+              };
+            }
+          } else if (sd.hit.type === "handleIn" && target.handleIn) {
+            const orig = sd.origAnchors[sd.hit.index];
+            target.handleIn = {
+              x: orig.handleIn!.x + dx,
+              y: orig.handleIn!.y + dy,
+            };
+          } else if (sd.hit.type === "handleOut" && target.handleOut) {
+            const orig = sd.origAnchors[sd.hit.index];
+            target.handleOut = {
+              x: orig.handleOut!.x + dx,
+              y: orig.handleOut!.y + dy,
+            };
+          }
+        }
+
+        setSubselectionAnchors(newAnchors);
+        stage.setSubselection(sd.objectId, newAnchors, subselectedPoints);
+        return;
+      }
+
       // Handle object dragging
       if (isDraggingRef.current && onDragMove) {
         onDragMove(x, y);
@@ -504,9 +739,21 @@ export function CanvasViewport({
         return;
       }
       if (isDraggingRef.current) {
+        const wasSubselDrag = subselDragRef.current != null;
+
+        // Commit subselection drag
+        if (subselDragRef.current && subselectionAnchors) {
+          const sd = subselDragRef.current;
+          const newCommands = anchorsToPath(subselectionAnchors, sd.closed);
+          onDataUpdate?.(sd.objectId, { commands: newCommands });
+          subselDragRef.current = null;
+        }
+
         isDraggingRef.current = false;
         dragTypeRef.current = null;
-        onDragEnd?.();
+        if (!wasSubselDrag) {
+          onDragEnd?.();
+        }
       }
 
       // Pen tool: commit pending point
@@ -550,6 +797,7 @@ export function CanvasViewport({
     if (isDraggingRef.current) {
       isDraggingRef.current = false;
       dragTypeRef.current = null;
+      subselDragRef.current = null;
       onDragEnd?.();
     }
   }, [onDragEnd]);
@@ -611,6 +859,9 @@ export function CanvasViewport({
     if (activeTool === "hand" || spaceHeld) return "grab";
     if (activeTool === "rect" || activeTool === "ellipse") return "crosshair";
     if (activeTool === "pen") return "crosshair";
+    if (activeTool === "subselect") return "default";
+    if (activeTool === "zoom") return "zoom-in";
+    if (activeTool === "shear") return "ew-resize";
     return "default";
   };
 

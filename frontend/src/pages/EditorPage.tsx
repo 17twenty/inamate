@@ -205,6 +205,33 @@ export function EditorPage() {
         e.preventDefault();
         commandDispatcher.redo();
       }
+
+      // Tool keyboard shortcuts (skip when typing in inputs or with modifiers)
+      const target = e.target as HTMLElement;
+      if (
+        !e.metaKey &&
+        !e.ctrlKey &&
+        !e.altKey &&
+        target.tagName !== "INPUT" &&
+        target.tagName !== "TEXTAREA"
+      ) {
+        const toolMap: Record<string, Tool> = {
+          v: "select",
+          a: "subselect",
+          r: "rect",
+          o: "ellipse",
+          p: "pen",
+          l: "line",
+          h: "hand",
+          s: "shear",
+          z: "zoom",
+        };
+        const tool = toolMap[e.key.toLowerCase()];
+        if (tool) {
+          e.preventDefault();
+          setActiveTool(tool);
+        }
+      }
     };
 
     const handleKeyUp = (e: KeyboardEvent) => {
@@ -448,6 +475,8 @@ export function EditorPage() {
             sx: animated.sx,
             sy: animated.sy,
             r: animated.r,
+            skewX: animated.skewX,
+            skewY: animated.skewY,
           };
           origTransforms.set(id, animTransform);
           overlayTransforms[id] = animTransform;
@@ -524,6 +553,31 @@ export function EditorPage() {
 
           newTransform.r = orig.r + (deltaAngle * 180) / Math.PI;
         }
+      } else if (drag.dragType === "anchor") {
+        // Anchor point drag: move anchor in local space, compensate position
+        // The mouse delta in scene space needs to be converted to anchor delta
+        // For simplicity, we compute the new anchor as: orig_anchor + mouse_delta / scale
+        const dx = x - drag.startX;
+        const dy = y - drag.startY;
+        // Approximate local-space delta by dividing by scale and undoing rotation
+        const cosR = Math.cos((-orig.r * Math.PI) / 180);
+        const sinR = Math.sin((-orig.r * Math.PI) / 180);
+        const localDx = (dx * cosR - dy * sinR) / orig.sx;
+        const localDy = (dx * sinR + dy * cosR) / orig.sy;
+        const newAx = orig.ax + localDx;
+        const newAy = orig.ay + localDy;
+        // Compensate position to keep visual placement stable
+        newTransform.ax = newAx;
+        newTransform.ay = newAy;
+        newTransform.x = orig.x + dx;
+        newTransform.y = orig.y + dy;
+      } else if (drag.dragType === "shear") {
+        // Shear: horizontal mouse delta = skewX, vertical = skewY
+        const dx = x - drag.startX;
+        const dy = y - drag.startY;
+        const sensitivity = 0.5; // degrees per pixel
+        newTransform.skewX = (orig.skewX ?? 0) + dx * sensitivity;
+        newTransform.skewY = (orig.skewY ?? 0) + dy * sensitivity;
       } else if (drag.dragType && drag.dragType.startsWith("scale-")) {
         // Scale from corner handle
         if (drag.bounds && drag.origWidth > 0 && drag.origHeight > 0) {
@@ -710,12 +764,22 @@ export function EditorPage() {
         final.y !== animOrig.y ||
         final.sx !== animOrig.sx ||
         final.sy !== animOrig.sy ||
-        final.r !== animOrig.r;
+        final.r !== animOrig.r ||
+        (final.skewX ?? 0) !== (animOrig.skewX ?? 0) ||
+        (final.skewY ?? 0) !== (animOrig.skewY ?? 0);
 
       if (hasChanged) {
         const updates: Record<string, number> = {};
         if (drag.dragType === "rotate") {
           updates["transform.r"] = final.r;
+        } else if (drag.dragType === "anchor") {
+          updates["transform.ax"] = final.ax;
+          updates["transform.ay"] = final.ay;
+          updates["transform.x"] = final.x;
+          updates["transform.y"] = final.y;
+        } else if (drag.dragType === "shear") {
+          updates["transform.skewX"] = final.skewX ?? 0;
+          updates["transform.skewY"] = final.skewY ?? 0;
         } else if (drag.dragType && drag.dragType.startsWith("scale-")) {
           updates["transform.sx"] = final.sx;
           updates["transform.sy"] = final.sy;
@@ -813,7 +877,17 @@ export function EditorPage() {
         type: "Group",
         parent: scene.root,
         children: [],
-        transform: { x: minX, y: minY, sx: 1, sy: 1, r: 0, ax: 0, ay: 0 },
+        transform: {
+          x: minX,
+          y: minY,
+          sx: 1,
+          sy: 1,
+          r: 0,
+          ax: 0,
+          ay: 0,
+          skewX: 0,
+          skewY: 0,
+        },
         style: { fill: "", stroke: "", strokeWidth: 0, opacity: 1 },
         visible: true,
         locked: false,
@@ -966,7 +1040,17 @@ export function EditorPage() {
         type: "Group",
         parent: null,
         children: [],
-        transform: { x: 0, y: 0, sx: 1, sy: 1, r: 0, ax: 0, ay: 0 },
+        transform: {
+          x: 0,
+          y: 0,
+          sx: 1,
+          sy: 1,
+          r: 0,
+          ax: 0,
+          ay: 0,
+          skewX: 0,
+          skewY: 0,
+        },
         style: { fill: "", stroke: "", strokeWidth: 0, opacity: 1 },
         visible: true,
         locked: false,
@@ -1079,6 +1163,23 @@ export function EditorPage() {
     [updateWithKeyframes],
   );
 
+  const handleDataUpdate = useCallback(
+    (objectId: string, data: Record<string, unknown>) => {
+      commandDispatcher.dispatch({
+        type: "object.data",
+        objectId,
+        data,
+      });
+
+      // Force-sync updated doc to WASM so canvas updates immediately
+      const updatedDoc = useEditorStore.getState().document;
+      if (updatedDoc) {
+        stageRef.current.updateDocument(updatedDoc);
+      }
+    },
+    [],
+  );
+
   // --- Object creation ---
 
   const handleCreateObject = useCallback(
@@ -1106,6 +1207,8 @@ export function EditorPage() {
           r: 0,
           ax: isEllipse ? 0 : defaultSize / 2,
           ay: isEllipse ? 0 : defaultSize / 2,
+          skewX: 0,
+          skewY: 0,
         },
         style: {
           fill: "#4a90d9",
@@ -1215,6 +1318,8 @@ export function EditorPage() {
           r: 0,
           ax: width / 2,
           ay: height / 2,
+          skewX: 0,
+          skewY: 0,
         },
         style: {
           fill: "none",
@@ -1302,6 +1407,8 @@ export function EditorPage() {
           r: 0,
           ax: w / 2,
           ay: h / 2,
+          skewX: 0,
+          skewY: 0,
         },
         style: {
           fill: "",
@@ -1397,6 +1504,10 @@ export function EditorPage() {
           return obj.transform.sy;
         case "transform.r":
           return obj.transform.r;
+        case "transform.skewX":
+          return obj.transform.skewX ?? 0;
+        case "transform.skewY":
+          return obj.transform.skewY ?? 0;
         case "style.opacity":
           return obj.style.opacity;
         case "style.fill":
@@ -1448,6 +1559,12 @@ export function EditorPage() {
               break;
             case "transform.r":
               value = animated.r;
+              break;
+            case "transform.skewX":
+              value = animated.skewX;
+              break;
+            case "transform.skewY":
+              value = animated.skewY;
               break;
           }
         }
@@ -1721,6 +1838,8 @@ export function EditorPage() {
       "transform.sx",
       "transform.sy",
       "transform.r",
+      "transform.skewX",
+      "transform.skewY",
       "style.opacity",
       "style.fill",
       "style.stroke",
@@ -1880,6 +1999,17 @@ export function EditorPage() {
     return doc.objects[singleSelectedId] || null;
   }, [doc, singleSelectedId]);
 
+  // Map of selected object IDs → ObjectNode for subselection tool
+  const selectedObjectsMap = useMemo(() => {
+    if (!doc || selectedObjectIds.length === 0) return {};
+    const map: Record<string, (typeof doc.objects)[string]> = {};
+    for (const id of selectedObjectIds) {
+      const obj = doc.objects[id];
+      if (obj) map[id] = obj;
+    }
+    return map;
+  }, [doc, selectedObjectIds]);
+
   // Show error UI if document failed to load
   if (loadError) {
     const isAnonymous = !token;
@@ -1994,6 +2124,8 @@ export function EditorPage() {
             onCreateObject={handleCreateObject}
             onCreatePath={handleCreatePath}
             onMarqueeSelect={handleMarqueeSelect}
+            selectedObjects={selectedObjectsMap}
+            onDataUpdate={handleDataUpdate}
           />
         </div>
 
@@ -2005,6 +2137,7 @@ export function EditorPage() {
             scene={scene}
             onSceneUpdate={handleSceneUpdate}
             onObjectUpdate={handleObjectUpdate}
+            onDataUpdate={handleDataUpdate}
           />
         )}
       </div>

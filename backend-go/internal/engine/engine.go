@@ -354,11 +354,13 @@ func (e *Engine) GetAnimatedTransform(objectID string) string {
 	}
 
 	data, _ := json.Marshal(map[string]interface{}{
-		"x":  transform.X,
-		"y":  transform.Y,
-		"sx": transform.SX,
-		"sy": transform.SY,
-		"r":  transform.R,
+		"x":     transform.X,
+		"y":     transform.Y,
+		"sx":    transform.SX,
+		"sy":    transform.SY,
+		"r":     transform.R,
+		"skewX": transform.SkewX,
+		"skewY": transform.SkewY,
 	})
 	return string(data)
 }

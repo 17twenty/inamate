@@ -1,12 +1,22 @@
 import type { InDocument, Scene, Asset } from "../types/document";
-import type { DrawCommand, HandleType, Bounds } from "./commands";
+import type {
+  DrawCommand,
+  HandleType,
+  Bounds,
+  SubselectionHit,
+} from "./commands";
 import {
   executeCommands,
   renderSelectionOutline,
+  renderAnchorPoint,
+  renderSubselectionOverlay,
   hitTestHandle,
+  hitTestAnchorPoint as hitTestAnchorPointCmd,
+  hitTestSubselection as hitTestSubselectionCmd,
   getWorldBounds,
   setImageLoadedCallback,
 } from "./commands";
+import type { AnchorPoint } from "./pathUtils";
 import * as wasm from "./wasmBridge";
 
 export interface StageEvents {
@@ -42,8 +52,17 @@ export class Stage {
   // Document assets for image rendering (kept separate from WASM doc)
   private assets: Record<string, Asset> = {};
 
+  // Document objects reference for anchor point lookups
+  private docObjects: Record<string, import("../types/document").ObjectNode> =
+    {};
+
   // Device pixel ratio for high-DPI displays
   private dpr = 1;
+
+  // Subselection state (managed externally by CanvasViewport)
+  private subselectionAnchors: AnchorPoint[] | null = null;
+  private subselectedPoints: Set<number> = new Set();
+  private subselectionObjectId: string | null = null;
 
   constructor() {}
 
@@ -105,6 +124,7 @@ export class Stage {
   private loadDocumentInternal(doc: InDocument): void {
     wasm.loadDocument(doc);
     this.assets = doc.assets || {};
+    this.docObjects = doc.objects || {};
     this.scene = wasm.getScene();
     this.updateFrameInterval();
     this.resizeCanvas();
@@ -121,6 +141,7 @@ export class Stage {
       return;
     }
     this.assets = doc.assets || {};
+    this.docObjects = doc.objects || {};
     try {
       wasm.updateDocument(doc);
     } catch (e) {
@@ -303,12 +324,74 @@ export class Stage {
   }
 
   /**
+   * Hit test for the anchor point of a selected object.
+   * Returns true if the point is over the anchor indicator.
+   */
+  hitTestAnchorPoint(x: number, y: number): boolean {
+    if (this.selectedObjectIds.length !== 1) return false;
+    const id = this.selectedObjectIds[0];
+    const cmd = this.lastCommands.find((c) => c.objectId === id);
+    if (!cmd) return false;
+    const obj = this.docObjects[id];
+    if (!obj) return false;
+    return hitTestAnchorPointCmd(x, y, cmd, obj.transform.ax, obj.transform.ay);
+  }
+
+  /**
+   * Set subselection state for rendering anchor points and handles.
+   */
+  setSubselection(
+    objectId: string | null,
+    anchors: AnchorPoint[] | null,
+    selectedPoints: Set<number>,
+  ): void {
+    this.subselectionObjectId = objectId;
+    this.subselectionAnchors = anchors;
+    this.subselectedPoints = selectedPoints;
+    this.needsRender = true;
+  }
+
+  /**
+   * Clear subselection state.
+   */
+  clearSubselection(): void {
+    this.subselectionObjectId = null;
+    this.subselectionAnchors = null;
+    this.subselectedPoints = new Set();
+    this.needsRender = true;
+  }
+
+  /**
+   * Hit test for subselection anchor points and handles.
+   */
+  hitTestSubselection(x: number, y: number): SubselectionHit | null {
+    if (!this.subselectionObjectId || !this.subselectionAnchors) return null;
+    const cmd = this.lastCommands.find(
+      (c) => c.objectId === this.subselectionObjectId,
+    );
+    if (!cmd) return null;
+    return hitTestSubselectionCmd(
+      x,
+      y,
+      cmd,
+      this.subselectionAnchors,
+      this.subselectedPoints,
+    );
+  }
+
+  /**
    * Get the animated (keyframe-evaluated) transform for an object at the current frame.
    * Returns the effective transform after keyframe overrides are applied.
    */
-  getAnimatedTransform(
-    objectId: string,
-  ): { x: number; y: number; sx: number; sy: number; r: number } | null {
+  getAnimatedTransform(objectId: string): {
+    x: number;
+    y: number;
+    sx: number;
+    sy: number;
+    r: number;
+    skewX: number;
+    skewY: number;
+  } | null {
     if (!this.wasmReady) return null;
     return wasm.getAnimatedTransform(objectId);
   }
@@ -428,8 +511,38 @@ export class Stage {
       for (const id of this.selectedObjectIds) {
         const cmd = this.lastCommands.find((c) => c.objectId === id);
         if (cmd) {
-          renderSelectionOutline(this.ctx, cmd, showHandles);
+          // In subselection mode, show outline without handles
+          const useHandles = showHandles && id !== this.subselectionObjectId;
+          renderSelectionOutline(this.ctx, cmd, useHandles);
+
+          // Render anchor point indicator for single selection (not in subselect mode)
+          if (showHandles && id !== this.subselectionObjectId) {
+            const obj = this.docObjects[id];
+            if (obj) {
+              renderAnchorPoint(
+                this.ctx,
+                cmd,
+                obj.transform.ax,
+                obj.transform.ay,
+              );
+            }
+          }
         }
+      }
+    }
+
+    // Render subselection overlay
+    if (this.subselectionObjectId && this.subselectionAnchors && this.ctx) {
+      const cmd = this.lastCommands.find(
+        (c) => c.objectId === this.subselectionObjectId,
+      );
+      if (cmd) {
+        renderSubselectionOverlay(
+          this.ctx,
+          cmd,
+          this.subselectionAnchors,
+          this.subselectedPoints,
+        );
       }
     }
   }

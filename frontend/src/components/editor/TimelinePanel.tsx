@@ -55,6 +55,14 @@ const EASING_OPTIONS: { value: EasingType; label: string }[] = [
   { value: "easeIn", label: "Ease In" },
   { value: "easeOut", label: "Ease Out" },
   { value: "easeInOut", label: "Ease In/Out" },
+  { value: "cubicIn", label: "Cubic In" },
+  { value: "cubicOut", label: "Cubic Out" },
+  { value: "cubicInOut", label: "Cubic In/Out" },
+  { value: "backIn", label: "Back In" },
+  { value: "backOut", label: "Back Out" },
+  { value: "backInOut", label: "Back In/Out" },
+  { value: "elasticOut", label: "Elastic Out" },
+  { value: "bounceOut", label: "Bounce Out" },
 ];
 
 const LAYER_NAME_WIDTH = 144; // w-36 = 9rem = 144px
@@ -72,6 +80,8 @@ const ANIMATABLE_PROPERTIES = [
   { key: "transform.sx", label: "Scale X", short: "SX" },
   { key: "transform.sy", label: "Scale Y", short: "SY" },
   { key: "transform.r", label: "Rotation", short: "R" },
+  { key: "transform.skewX", label: "Skew X", short: "KX" },
+  { key: "transform.skewY", label: "Skew Y", short: "KY" },
   { key: "style.opacity", label: "Opacity", short: "O" },
   { key: "style.fill", label: "Fill", short: "F" },
   { key: "style.stroke", label: "Stroke", short: "S" },

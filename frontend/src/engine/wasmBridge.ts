@@ -257,6 +257,8 @@ export interface AnimatedTransform {
   sx: number;
   sy: number;
   r: number;
+  skewX: number;
+  skewY: number;
 }
 
 export function getAnimatedTransform(objectId: string): AnimatedTransform {

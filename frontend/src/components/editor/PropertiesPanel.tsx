@@ -1,5 +1,13 @@
 import { useCallback } from "react";
-import type { ObjectNode, Scene, Transform, Style } from "../../types/document";
+import type {
+  ObjectNode,
+  Scene,
+  Transform,
+  Style,
+  ShapeRectData,
+  ShapeEllipseData,
+  RasterImageData,
+} from "../../types/document";
 
 interface PropertiesPanelProps {
   selectedObject: ObjectNode | null;
@@ -10,6 +18,7 @@ interface PropertiesPanelProps {
     objectId: string,
     changes: { transform?: Partial<Transform>; style?: Partial<Style> },
   ) => void;
+  onDataUpdate?: (objectId: string, data: Record<string, unknown>) => void;
 }
 
 export function PropertiesPanel({
@@ -18,6 +27,7 @@ export function PropertiesPanel({
   scene,
   onSceneUpdate,
   onObjectUpdate,
+  onDataUpdate,
 }: PropertiesPanelProps) {
   // Show multi-select summary when multiple objects are selected
   if (!selectedObject && selectedCount > 1) {
@@ -50,7 +60,11 @@ export function PropertiesPanel({
   }
 
   return (
-    <ObjectProperties object={selectedObject} onObjectUpdate={onObjectUpdate} />
+    <ObjectProperties
+      object={selectedObject}
+      onObjectUpdate={onObjectUpdate}
+      onDataUpdate={onDataUpdate}
+    />
   );
 }
 
@@ -118,9 +132,14 @@ interface ObjectPropertiesProps {
     objectId: string,
     changes: { transform?: Partial<Transform>; style?: Partial<Style> },
   ) => void;
+  onDataUpdate?: (objectId: string, data: Record<string, unknown>) => void;
 }
 
-function ObjectProperties({ object, onObjectUpdate }: ObjectPropertiesProps) {
+function ObjectProperties({
+  object,
+  onObjectUpdate,
+  onDataUpdate,
+}: ObjectPropertiesProps) {
   const { transform, style } = object;
 
   const handleTransformChange = useCallback(
@@ -185,7 +204,89 @@ function ObjectProperties({ object, onObjectUpdate }: ObjectPropertiesProps) {
           }
           type="number"
         />
+        <EditablePropRow
+          label="Skew X"
+          value={(transform.skewX ?? 0).toFixed(1)}
+          onChange={(v) => handleTransformChange("skewX", parseFloat(v) || 0)}
+          type="number"
+        />
+        <EditablePropRow
+          label="Skew Y"
+          value={(transform.skewY ?? 0).toFixed(1)}
+          onChange={(v) => handleTransformChange("skewY", parseFloat(v) || 0)}
+          type="number"
+        />
+        <EditablePropRow
+          label="Anchor X"
+          value={transform.ax.toFixed(1)}
+          onChange={(v) => handleTransformChange("ax", parseFloat(v) || 0)}
+          type="number"
+        />
+        <EditablePropRow
+          label="Anchor Y"
+          value={transform.ay.toFixed(1)}
+          onChange={(v) => handleTransformChange("ay", parseFloat(v) || 0)}
+          type="number"
+        />
       </Section>
+
+      {/* Dimensions (type-specific) */}
+      {object.type === "ShapeRect" && (
+        <Section title="Dimensions">
+          <EditablePropRow
+            label="Width"
+            value={(object.data as ShapeRectData).width.toFixed(1)}
+            onChange={(v) =>
+              onDataUpdate?.(object.id, { width: parseFloat(v) || 0 })
+            }
+            type="number"
+          />
+          <EditablePropRow
+            label="Height"
+            value={(object.data as ShapeRectData).height.toFixed(1)}
+            onChange={(v) =>
+              onDataUpdate?.(object.id, { height: parseFloat(v) || 0 })
+            }
+            type="number"
+          />
+        </Section>
+      )}
+      {object.type === "ShapeEllipse" && (
+        <Section title="Dimensions">
+          <EditablePropRow
+            label="Radius X"
+            value={(object.data as ShapeEllipseData).rx.toFixed(1)}
+            onChange={(v) =>
+              onDataUpdate?.(object.id, { rx: parseFloat(v) || 0 })
+            }
+            type="number"
+          />
+          <EditablePropRow
+            label="Radius Y"
+            value={(object.data as ShapeEllipseData).ry.toFixed(1)}
+            onChange={(v) =>
+              onDataUpdate?.(object.id, { ry: parseFloat(v) || 0 })
+            }
+            type="number"
+          />
+        </Section>
+      )}
+      {object.type === "RasterImage" && (
+        <Section title="Dimensions">
+          <div className="mb-1 flex items-center justify-between">
+            <span className="text-xs text-gray-500">Width</span>
+            <span className="text-xs text-gray-400">
+              {(object.data as RasterImageData).width}
+            </span>
+          </div>
+          <div className="mb-1 flex items-center justify-between">
+            <span className="text-xs text-gray-500">Height</span>
+            <span className="text-xs text-gray-400">
+              {(object.data as RasterImageData).height}
+            </span>
+          </div>
+        </Section>
+      )}
 
       {/* Style */}
       <Section title="Style">

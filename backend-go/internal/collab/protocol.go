@@ -89,6 +89,9 @@ type Operation struct {
 	PreviousParentID string `json:"previousParentId,omitempty"`
 	PreviousIndex    *int   `json:"previousIndex,omitempty"`
 
+	// For object.data
+	Data json.RawMessage `json:"data,omitempty"`
+
 	// For object.visibility / object.locked
 	Visible      *bool `json:"visible,omitempty"`
 	Locked       *bool `json:"locked,omitempty"`

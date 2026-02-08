@@ -104,32 +104,37 @@ func (m Matrix2D) Invert() Matrix2D {
 	}
 }
 
-// FromTransform creates a matrix from document transform properties.
-// This composes: Translate(x, y) * Rotate(r) * Scale(sx, sy) * Translate(-ax, -ay)
-// The anchor point (ax, ay) is the rotation/scale center.
-func FromTransform(x, y, sx, sy, rDegrees, ax, ay float64) Matrix2D {
-	rad := rDegrees * math.Pi / 180.0
-	cos := math.Cos(rad)
-	sin := math.Sin(rad)
-
-	// Combine all operations into a single matrix:
-	// T(x,y) * R(r) * S(sx,sy) * T(-ax,-ay)
-	//
-	// Working through the math:
-	// Let's denote the composed transform:
-	// First translate by (-ax, -ay): point becomes (px-ax, py-ay)
-	// Scale: ((px-ax)*sx, (py-ay)*sy)
-	// Rotate: (cos*...-sin*..., sin*...+cos*...)
-	// Translate by (x,y): add (x, y)
-
+// Skew returns a shear/skew matrix (angles in radians).
+//
+//	| 1          tan(skewX)  0 |
+//	| tan(skewY) 1           0 |
+//	| 0          0            1 |
+func Skew(skewXRad, skewYRad float64) Matrix2D {
 	return Matrix2D{
-		cos * sx,                       // a
-		sin * sx,                       // b
-		-sin * sy,                      // c
-		cos * sy,                       // d
-		x + ax - cos*sx*ax + sin*sy*ay, // e
-		y + ay - sin*sx*ax - cos*sy*ay, // f
+		1,
+		math.Tan(skewYRad),
+		math.Tan(skewXRad),
+		1,
+		0,
+		0,
 	}
+}
+
+// FromTransform creates a matrix from document transform properties.
+// This composes: T(x,y) * R(r) * Skew(skewX, skewY) * S(sx, sy) * T(-ax, -ay)
+// The anchor point (ax, ay) is the rotation/scale center.
+func FromTransform(x, y, sx, sy, rDegrees, ax, ay, skewXDeg, skewYDeg float64) Matrix2D {
+	// Step-by-step composition for clarity and to support shear.
+	m := Translate(-ax, -ay)
+	m = Scale(sx, sy).Multiply(m)
+	if skewXDeg != 0 || skewYDeg != 0 {
+		m = Skew(skewXDeg*math.Pi/180.0, skewYDeg*math.Pi/180.0).Multiply(m)
+	}
+	if rDegrees != 0 {
+		m = RotateDegrees(rDegrees).Multiply(m)
+	}
+	m = Translate(x, y).Multiply(m)
+	return m
 }
 
 // ToSlice returns the matrix as a float64 slice for JSON serialization.

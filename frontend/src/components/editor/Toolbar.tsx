@@ -1,6 +1,15 @@
 import type { ReactNode } from "react";
 
-export type Tool = "select" | "rect" | "ellipse" | "pen" | "line" | "hand";
+export type Tool =
+  | "select"
+  | "subselect"
+  | "rect"
+  | "ellipse"
+  | "pen"
+  | "line"
+  | "hand"
+  | "shear"
+  | "zoom";
 
 interface ToolbarProps {
   activeTool: Tool;
@@ -22,6 +31,20 @@ const icons: Record<Tool, ReactNode> = {
       strokeLinejoin="round"
     >
       <path d="M3 2l5 14 2-5.5L15.5 9z" />
+    </svg>
+  ),
+  subselect: (
+    <svg
+      width={iconSize}
+      height={iconSize}
+      viewBox="0 0 18 18"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.5"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <path d="M3 2l5 14 2-5.5L15.5 9z" strokeDasharray="3 2" />
     </svg>
   ),
   rect: (
@@ -97,14 +120,50 @@ const icons: Record<Tool, ReactNode> = {
       <path d="M12.5 8V6.5a1 1 0 012 0v4a5 5 0 01-5 5h-1a5 5 0 01-4-2l-2-2.5a1 1 0 011.5-1.3L6.5 13V8" />
     </svg>
   ),
+  shear: (
+    <svg
+      width={iconSize}
+      height={iconSize}
+      viewBox="0 0 18 18"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.5"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <path d="M6 3h9v12H3V3h3" />
+      <path d="M3 15L6 3" />
+      <path d="M15 15V3" />
+    </svg>
+  ),
+  zoom: (
+    <svg
+      width={iconSize}
+      height={iconSize}
+      viewBox="0 0 18 18"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.5"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <circle cx="8" cy="8" r="5" />
+      <line x1="12" y1="12" x2="16" y2="16" />
+      <line x1="6" y1="8" x2="10" y2="8" />
+      <line x1="8" y1="6" x2="8" y2="10" />
+    </svg>
+  ),
 };
 
 const tools: { id: Tool; label: string }[] = [
   { id: "select", label: "Select (V)" },
+  { id: "subselect", label: "Direct Select (A)" },
   { id: "rect", label: "Rectangle (R)" },
   { id: "ellipse", label: "Ellipse (O)" },
   { id: "pen", label: "Pen (P)" },
   { id: "line", label: "Line (L)" },
+  { id: "shear", label: "Shear (S)" },
+  { id: "zoom", label: "Zoom (Z)" },
   { id: "hand", label: "Hand (H)" },
 ];
 

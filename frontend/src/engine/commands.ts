@@ -1,4 +1,5 @@
 import type { PathCommand, Asset } from "../types/document";
+import type { AnchorPoint } from "./pathUtils";
 
 /**
  * DrawCommand represents a single drawing operation from the WASM engine.
@@ -531,6 +532,213 @@ export function hitTestHandle(
   for (const corner of handleCorners) {
     if (Math.hypot(x - corner.x, y - corner.y) < handleRadius) {
       return corner.type;
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Render an anchor point indicator (crosshair + dot) at the given local-space
+ * anchor coordinates, transformed to world space via the command's transform.
+ */
+export function renderAnchorPoint(
+  ctx: CanvasRenderingContext2D,
+  cmd: DrawCommand,
+  ax: number,
+  ay: number,
+): void {
+  if (!cmd.transform) return;
+  const world = transformPoint(ax, ay, cmd.transform);
+  const size = 8;
+
+  ctx.save();
+  ctx.setLineDash([]);
+
+  // Crosshair lines
+  ctx.strokeStyle = "#ff6600";
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  ctx.moveTo(world.x - size, world.y);
+  ctx.lineTo(world.x + size, world.y);
+  ctx.moveTo(world.x, world.y - size);
+  ctx.lineTo(world.x, world.y + size);
+  ctx.stroke();
+
+  // Center dot
+  ctx.beginPath();
+  ctx.arc(world.x, world.y, 3, 0, Math.PI * 2);
+  ctx.fillStyle = "#ff6600";
+  ctx.fill();
+  ctx.strokeStyle = "#ffffff";
+  ctx.lineWidth = 1;
+  ctx.stroke();
+
+  ctx.restore();
+}
+
+/**
+ * Hit test for the anchor point indicator.
+ * Returns true if (x, y) is within the hit radius of the world-space anchor.
+ */
+export function hitTestAnchorPoint(
+  x: number,
+  y: number,
+  cmd: DrawCommand,
+  ax: number,
+  ay: number,
+): boolean {
+  if (!cmd.transform) return false;
+  const world = transformPoint(ax, ay, cmd.transform);
+  return Math.hypot(x - world.x, y - world.y) < 10;
+}
+
+/**
+ * Result of a subselection hit test.
+ */
+export interface SubselectionHit {
+  type: "anchor" | "handleIn" | "handleOut";
+  index: number;
+}
+
+/**
+ * Render the subselection overlay for a VectorPath.
+ * Shows anchor points (diamonds for unselected, filled squares for selected)
+ * and handles (lines + circles) for selected anchors.
+ */
+export function renderSubselectionOverlay(
+  ctx: CanvasRenderingContext2D,
+  cmd: DrawCommand,
+  anchors: AnchorPoint[],
+  selectedPointIndices: Set<number>,
+): void {
+  if (!cmd.transform) return;
+
+  ctx.save();
+  ctx.setLineDash([]);
+
+  for (const anchor of anchors) {
+    const worldPt = transformPoint(anchor.x, anchor.y, cmd.transform);
+    const isSelected = selectedPointIndices.has(anchor.index);
+
+    // Draw handles for selected anchors
+    if (isSelected) {
+      if (anchor.handleIn) {
+        const worldH = transformPoint(
+          anchor.handleIn.x,
+          anchor.handleIn.y,
+          cmd.transform,
+        );
+        // Handle line
+        ctx.strokeStyle = "#ff6600";
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(worldPt.x, worldPt.y);
+        ctx.lineTo(worldH.x, worldH.y);
+        ctx.stroke();
+        // Handle dot
+        ctx.beginPath();
+        ctx.arc(worldH.x, worldH.y, 3, 0, Math.PI * 2);
+        ctx.fillStyle = "#ff6600";
+        ctx.fill();
+        ctx.strokeStyle = "#ffffff";
+        ctx.lineWidth = 1;
+        ctx.stroke();
+      }
+      if (anchor.handleOut) {
+        const worldH = transformPoint(
+          anchor.handleOut.x,
+          anchor.handleOut.y,
+          cmd.transform,
+        );
+        ctx.strokeStyle = "#ff6600";
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(worldPt.x, worldPt.y);
+        ctx.lineTo(worldH.x, worldH.y);
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.arc(worldH.x, worldH.y, 3, 0, Math.PI * 2);
+        ctx.fillStyle = "#ff6600";
+        ctx.fill();
+        ctx.strokeStyle = "#ffffff";
+        ctx.lineWidth = 1;
+        ctx.stroke();
+      }
+    }
+
+    // Draw anchor point
+    const size = 5;
+    if (isSelected) {
+      // Filled square for selected
+      ctx.fillStyle = "#0066ff";
+      ctx.fillRect(worldPt.x - size / 2, worldPt.y - size / 2, size, size);
+      ctx.strokeStyle = "#ffffff";
+      ctx.lineWidth = 1;
+      ctx.strokeRect(worldPt.x - size / 2, worldPt.y - size / 2, size, size);
+    } else {
+      // Diamond for unselected
+      ctx.save();
+      ctx.translate(worldPt.x, worldPt.y);
+      ctx.rotate(Math.PI / 4);
+      ctx.fillStyle = "#ffffff";
+      ctx.fillRect(-size / 2, -size / 2, size, size);
+      ctx.strokeStyle = "#0066ff";
+      ctx.lineWidth = 1;
+      ctx.strokeRect(-size / 2, -size / 2, size, size);
+      ctx.restore();
+    }
+  }
+
+  ctx.restore();
+}
+
+/**
+ * Hit test for subselection anchor points and handles.
+ * Tests handles first (higher priority), then anchor points.
+ * Returns the hit type and index, or null if no hit.
+ */
+export function hitTestSubselection(
+  x: number,
+  y: number,
+  cmd: DrawCommand,
+  anchors: AnchorPoint[],
+  selectedPointIndices: Set<number>,
+): SubselectionHit | null {
+  if (!cmd.transform) return null;
+  const hitRadius = 8;
+
+  // Test handles first (only visible for selected anchors)
+  for (const anchor of anchors) {
+    if (!selectedPointIndices.has(anchor.index)) continue;
+
+    if (anchor.handleIn) {
+      const worldH = transformPoint(
+        anchor.handleIn.x,
+        anchor.handleIn.y,
+        cmd.transform,
+      );
+      if (Math.hypot(x - worldH.x, y - worldH.y) < hitRadius) {
+        return { type: "handleIn", index: anchor.index };
+      }
+    }
+    if (anchor.handleOut) {
+      const worldH = transformPoint(
+        anchor.handleOut.x,
+        anchor.handleOut.y,
+        cmd.transform,
+      );
+      if (Math.hypot(x - worldH.x, y - worldH.y) < hitRadius) {
+        return { type: "handleOut", index: anchor.index };
+      }
+    }
+  }
+
+  // Test anchor points
+  for (const anchor of anchors) {
+    const worldPt = transformPoint(anchor.x, anchor.y, cmd.transform);
+    if (Math.hypot(x - worldPt.x, y - worldPt.y) < hitRadius) {
+      return { type: "anchor", index: anchor.index };
     }
   }
 

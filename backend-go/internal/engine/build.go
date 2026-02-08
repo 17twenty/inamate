@@ -100,6 +100,7 @@ func buildNode(
 		transform.SX, transform.SY,
 		transform.R,
 		transform.AX, transform.AY,
+		transform.SkewX, transform.SkewY,
 	)
 	worldMatrix := parentWorldTransform.Multiply(localMatrix)
 
