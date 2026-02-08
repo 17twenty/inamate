@@ -17,7 +17,7 @@ import { TimelinePanel } from "../components/editor/TimelinePanel";
 import type { BreadcrumbEntry } from "../components/editor/TimelinePanel";
 import { MenuBar } from "../components/editor/MenuBar";
 import { getLatestSnapshot } from "../api/projects";
-import { exportPngSequence } from "../utils/export";
+import { exportPngSequence, exportVideo } from "../utils/export";
 
 import { MessageTypes } from "../types/protocol";
 import type { Message } from "../types/protocol";
@@ -1994,6 +1994,40 @@ export function EditorPage() {
     }
   }, [doc, scene, selectedObjectIds, currentFrame, totalFrames]);
 
+  const handleExportVideo = useCallback(
+    async (format: "mp4" | "gif" | "webm") => {
+      if (!doc || !scene) return;
+
+      const canvas = containerRef.current?.querySelector("canvas");
+      if (!canvas) return;
+
+      const previousSelection = selectedObjectIds;
+      const previousFrame = currentFrame;
+
+      stageRef.current.setSelectedObjectIds([]);
+
+      try {
+        await exportVideo(
+          stageRef.current,
+          canvas,
+          doc.project.name,
+          totalFrames,
+          format,
+          doc.project.fps || 24,
+          (progress) => setExportProgress(progress),
+        );
+      } catch (error) {
+        console.error("Video export failed:", error);
+      } finally {
+        setExportProgress(null);
+        stageRef.current.seek(previousFrame);
+        stageRef.current.setSelectedObjectIds(previousSelection);
+        stageRef.current.invalidate();
+      }
+    },
+    [doc, scene, selectedObjectIds, currentFrame, totalFrames],
+  );
+
   const selectedObject = useMemo(() => {
     if (!doc || !singleSelectedId) return null;
     return doc.objects[singleSelectedId] || null;
@@ -2076,6 +2110,9 @@ export function EditorPage() {
         onNewDocument={handleNewDocument}
         onExportPng={handleExportPng}
         onExportPngSequence={handleExportPngSequence}
+        onExportMp4={() => handleExportVideo("mp4")}
+        onExportGif={() => handleExportVideo("gif")}
+        onExportWebm={() => handleExportVideo("webm")}
         isExporting={exportProgress !== null}
         onZoomIn={handleZoomIn}
         onZoomOut={handleZoomOut}
@@ -2185,6 +2222,7 @@ export function EditorPage() {
                   {exportProgress.total}...
                 </>
               )}
+              {exportProgress.phase === "encoding" && <>Encoding video...</>}
               {exportProgress.phase === "zipping" && <>Creating zip file...</>}
               {exportProgress.phase === "downloading" && (
                 <>Starting download...</>

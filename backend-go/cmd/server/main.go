@@ -22,6 +22,7 @@ import (
 	"github.com/inamate/inamate/backend-go/internal/db"
 	"github.com/inamate/inamate/backend-go/internal/db/dbgen"
 	"github.com/inamate/inamate/backend-go/internal/document"
+	"github.com/inamate/inamate/backend-go/internal/export"
 	mw "github.com/inamate/inamate/backend-go/internal/middleware"
 	"github.com/inamate/inamate/backend-go/internal/project"
 )
@@ -98,6 +99,7 @@ func main() {
 	go hub.Run()
 
 	assetHandler := asset.NewHandler(cfg.AssetDir)
+	exportHandler := export.NewHandler(cfg.FfmpegPath)
 
 	r := mux.NewRouter()
 
@@ -119,6 +121,9 @@ func main() {
 	// Asset endpoints (public — used by playground and authenticated users)
 	r.HandleFunc("/assets/upload", assetHandler.Upload).Methods("POST", "OPTIONS")
 	r.PathPrefix("/assets/").Handler(assetHandler.Serve()).Methods("GET")
+
+	// Export endpoint (public — used by playground and authenticated users)
+	r.HandleFunc("/export/video", exportHandler.ExportVideo).Methods("POST", "OPTIONS")
 
 	// Protected API routes
 	api := r.PathPrefix("/api").Subrouter()
@@ -143,7 +148,7 @@ func main() {
 		Addr:         addr,
 		Handler:      r,
 		ReadTimeout:  15 * time.Second,
-		WriteTimeout: 15 * time.Second,
+		WriteTimeout: 120 * time.Second,
 		IdleTimeout:  60 * time.Second,
 	}
 

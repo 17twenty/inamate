@@ -9,6 +9,7 @@ type Config struct {
 	DatabaseURL string `envconfig:"DATABASE_URL" default:"postgres://inamate:inamate_dev@localhost:5433/inamate?sslmode=disable"`
 	JWTSecret   string `envconfig:"JWT_SECRET" default:"dev-secret-change-in-production"`
 	AssetDir    string `envconfig:"ASSET_DIR" default:"./data/assets"`
+	FfmpegPath  string `envconfig:"FFMPEG_PATH" default:"ffmpeg"`
 }
 
 func Load() (*Config, error) {

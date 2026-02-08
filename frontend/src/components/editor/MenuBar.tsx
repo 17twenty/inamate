@@ -27,6 +27,9 @@ interface MenuBarProps {
   onNewDocument: () => void;
   onExportPng: () => void;
   onExportPngSequence: () => void;
+  onExportMp4: () => void;
+  onExportGif: () => void;
+  onExportWebm: () => void;
   isExporting?: boolean;
   onZoomIn: () => void;
   onZoomOut: () => void;
@@ -57,6 +60,9 @@ export function MenuBar({
   onNewDocument,
   onExportPng,
   onExportPngSequence,
+  onExportMp4,
+  onExportGif,
+  onExportWebm,
   isExporting,
   onZoomIn,
   onZoomOut,
@@ -97,6 +103,22 @@ export function MenuBar({
         {
           label: "Export PNG Sequence...",
           action: onExportPngSequence,
+          disabled: isExporting,
+        },
+        { separator: true },
+        {
+          label: "Export MP4 Video",
+          action: onExportMp4,
+          disabled: isExporting,
+        },
+        {
+          label: "Export GIF",
+          action: onExportGif,
+          disabled: isExporting,
+        },
+        {
+          label: "Export WebM Video",
+          action: onExportWebm,
           disabled: isExporting,
         },
       ],
