@@ -17,6 +17,7 @@ import {
   hitTestSubselection as hitTestSubselectionCmd,
   getWorldBounds,
   setImageLoadedCallback,
+  drawGrid,
 } from "./commands";
 import type { AnchorPoint } from "./pathUtils";
 import * as wasm from "./wasmBridge";
@@ -72,6 +73,10 @@ export class Stage {
   private subselectionAnchors: AnchorPoint[] | null = null;
   private subselectedPoints: Set<number> = new Set();
   private subselectionObjectId: string | null = null;
+
+  // Grid state
+  private gridEnabled = false;
+  private gridSize = 20;
 
   constructor() {}
 
@@ -293,6 +298,15 @@ export class Stage {
     this.onionSkinEnabled = enabled;
     this.onionSkinBefore = before;
     this.onionSkinAfter = after;
+    this.needsRender = true;
+  }
+
+  /**
+   * Configure grid overlay rendering.
+   */
+  setGrid(enabled: boolean, size: number): void {
+    this.gridEnabled = enabled;
+    this.gridSize = size;
     this.needsRender = true;
   }
 
@@ -631,6 +645,18 @@ export class Stage {
         this.scene.background,
         this.dpr,
         this.assets,
+      );
+    }
+
+    // Render grid overlay (between objects and selection outlines)
+    if (this.gridEnabled && this.scene && this.ctx) {
+      drawGrid(
+        this.ctx,
+        this.scene.width,
+        this.scene.height,
+        this.gridSize,
+        this.dpr,
+        this.scene.background || "#ffffff",
       );
     }
 

@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"os/exec"
 	"os/signal"
 	"strings"
 	"syscall"
@@ -118,6 +119,9 @@ func main() {
 
 	assetHandler := asset.NewHandler(cfg.AssetDir)
 	exportHandler := export.NewHandler(cfg.FfmpegPath)
+	if _, err := exec.LookPath(cfg.FfmpegPath); err != nil {
+		slog.Warn("ffmpeg not found — video export (MP4/GIF/WebM) will be unavailable", "path", cfg.FfmpegPath)
+	}
 
 	r := mux.NewRouter()
 

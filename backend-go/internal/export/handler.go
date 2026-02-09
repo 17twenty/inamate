@@ -2,6 +2,7 @@ package export
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"io"
 	"log/slog"
@@ -11,6 +12,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 )
 
 const maxUploadSize = 500 << 20 // 500MB
@@ -24,6 +26,11 @@ func NewHandler(ffmpegPath string) *Handler {
 }
 
 func (h *Handler) ExportVideo(w http.ResponseWriter, r *http.Request) {
+	if _, err := exec.LookPath(h.ffmpegPath); err != nil {
+		http.Error(w, "video export requires ffmpeg to be installed", http.StatusServiceUnavailable)
+		return
+	}
+
 	r.Body = http.MaxBytesReader(w, r.Body, maxUploadSize)
 
 	if err := r.ParseMultipartForm(maxUploadSize); err != nil {
@@ -64,6 +71,17 @@ func (h *Handler) ExportVideo(w http.ResponseWriter, r *http.Request) {
 	}
 	defer os.RemoveAll(tempDir)
 
+	// Determine frame padding from the expected frame count (sent by frontend)
+	// so filenames match the ffmpeg input pattern.
+	expectedFrames, _ := strconv.Atoi(r.FormValue("frameCount"))
+	padWidth := 4
+	if expectedFrames > 0 {
+		pw := len(strconv.Itoa(expectedFrames - 1))
+		if pw > padWidth {
+			padWidth = pw
+		}
+	}
+
 	// Write uploaded frames to temp directory, preserving the frame index
 	// from the key name (e.g. "frame_0003" → "frame_0003.png").
 	// Map iteration order is random in Go, so we must use the key name
@@ -93,7 +111,7 @@ func (h *Handler) ExportVideo(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		outPath := filepath.Join(tempDir, fmt.Sprintf("frame_%04d.png", frameIdx))
+		outPath := filepath.Join(tempDir, fmt.Sprintf("frame_%0*d.png", padWidth, frameIdx))
 		out, err := os.Create(outPath)
 		if err != nil {
 			f.Close()
@@ -120,6 +138,8 @@ func (h *Handler) ExportVideo(w http.ResponseWriter, r *http.Request) {
 
 	slog.Info("export started", "format", format, "frames", frameCount, "fps", fps)
 
+	inputPattern := filepath.Join(tempDir, fmt.Sprintf("frame_%%0%dd.png", padWidth))
+
 	// Build and run ffmpeg command
 	var outputFile string
 	var contentType string
@@ -131,7 +151,7 @@ func (h *Handler) ExportVideo(w http.ResponseWriter, r *http.Request) {
 		contentType = "video/mp4"
 		cmdErr = h.runFfmpeg(r, tempDir, fps,
 			"-framerate", strconv.Itoa(fps),
-			"-i", filepath.Join(tempDir, "frame_%04d.png"),
+			"-i", inputPattern,
 			"-c:v", "libx264",
 			"-pix_fmt", "yuv420p",
 			"-crf", "18",
@@ -147,14 +167,14 @@ func (h *Handler) ExportVideo(w http.ResponseWriter, r *http.Request) {
 		palettePath := filepath.Join(tempDir, "palette.png")
 		cmdErr = h.runFfmpeg(r, tempDir, fps,
 			"-framerate", strconv.Itoa(fps),
-			"-i", filepath.Join(tempDir, "frame_%04d.png"),
+			"-i", inputPattern,
 			"-vf", "palettegen=stats_mode=diff",
 			palettePath,
 		)
 		if cmdErr == nil {
 			cmdErr = h.runFfmpeg(r, tempDir, fps,
 				"-framerate", strconv.Itoa(fps),
-				"-i", filepath.Join(tempDir, "frame_%04d.png"),
+				"-i", inputPattern,
 				"-i", palettePath,
 				"-lavfi", "paletteuse=dither=bayer:bayer_scale=5:diff_mode=rectangle",
 				outputFile,
@@ -166,7 +186,7 @@ func (h *Handler) ExportVideo(w http.ResponseWriter, r *http.Request) {
 		contentType = "video/webm"
 		cmdErr = h.runFfmpeg(r, tempDir, fps,
 			"-framerate", strconv.Itoa(fps),
-			"-i", filepath.Join(tempDir, "frame_%04d.png"),
+			"-i", inputPattern,
 			"-c:v", "libvpx-vp9",
 			"-crf", "30",
 			"-b:v", "0",
@@ -206,9 +226,12 @@ func (h *Handler) ExportVideo(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) runFfmpeg(r *http.Request, _ string, _ int, args ...string) error {
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Minute)
+	defer cancel()
+
 	// Prepend -y to overwrite output without prompting
 	fullArgs := append([]string{"-y"}, args...)
-	cmd := exec.CommandContext(r.Context(), h.ffmpegPath, fullArgs...)
+	cmd := exec.CommandContext(ctx, h.ffmpegPath, fullArgs...)
 
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr

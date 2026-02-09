@@ -60,6 +60,15 @@ interface MenuBarProps {
   onPaste?: () => void;
   canPaste?: boolean;
   onDuplicate?: () => void;
+  // SVG import
+  onImportSvg?: () => void;
+  // Grid & snap
+  gridEnabled?: boolean;
+  snapToGrid?: boolean;
+  gridSize?: number;
+  onToggleGrid?: () => void;
+  onToggleSnap?: () => void;
+  onSetGridSize?: (size: number) => void;
 }
 
 export function MenuBar({
@@ -100,6 +109,13 @@ export function MenuBar({
   onPaste,
   canPaste,
   onDuplicate,
+  onImportSvg,
+  gridEnabled,
+  snapToGrid,
+  gridSize,
+  onToggleGrid,
+  onToggleSnap,
+  onSetGridSize,
 }: MenuBarProps) {
   const [openMenu, setOpenMenu] = useState<string | null>(null);
   const barRef = useRef<HTMLDivElement>(null);
@@ -115,6 +131,11 @@ export function MenuBar({
           label: "New",
           shortcut: isMac() ? "Cmd+N" : "Ctrl+N",
           action: onNewDocument,
+        },
+        {
+          label: "Import SVG...",
+          shortcut: isMac() ? "Cmd+I" : "Ctrl+I",
+          action: onImportSvg,
         },
         { separator: true },
         {
@@ -272,6 +293,38 @@ export function MenuBar({
         { separator: true },
         { label: "Toggle Timeline", action: onToggleTimeline },
         { label: "Toggle Properties", action: onToggleProperties },
+        { separator: true },
+        {
+          label: gridEnabled ? "Hide Grid" : "Show Grid",
+          shortcut: "G",
+          action: onToggleGrid,
+        },
+        {
+          label: snapToGrid ? "Disable Snap" : "Enable Snap",
+          shortcut: "Shift+G",
+          action: onToggleSnap,
+        },
+        { separator: true },
+        {
+          label: `Grid: 10px${gridSize === 10 ? "  \u2713" : ""}`,
+          action: () => onSetGridSize?.(10),
+        },
+        {
+          label: `Grid: 20px${gridSize === 20 ? "  \u2713" : ""}`,
+          action: () => onSetGridSize?.(20),
+        },
+        {
+          label: `Grid: 40px${gridSize === 40 ? "  \u2713" : ""}`,
+          action: () => onSetGridSize?.(40),
+        },
+        {
+          label: `Grid: 50px${gridSize === 50 ? "  \u2713" : ""}`,
+          action: () => onSetGridSize?.(50),
+        },
+        {
+          label: `Grid: 100px${gridSize === 100 ? "  \u2713" : ""}`,
+          action: () => onSetGridSize?.(100),
+        },
       ],
     },
   ];

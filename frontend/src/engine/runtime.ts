@@ -149,10 +149,10 @@ export const RUNTIME_JS = `
     ctx.restore();
 
     // Recurse
-    renderNode(ctx, doc, rootObj, [1,0,0,1,0,0], 1, overrides);
+    renderNode(ctx, doc, rootObj, [1,0,0,1,0,0], 1, overrides, frame);
   }
 
-  function renderNode(ctx, doc, obj, parentMatrix, parentOpacity, overrides) {
+  function renderNode(ctx, doc, obj, parentMatrix, parentOpacity, overrides, frame) {
     if (!obj || !obj.visible) return;
 
     var t = {
@@ -254,10 +254,21 @@ export const RUNTIME_JS = `
       }
     }
 
+    // Evaluate Symbol nested timeline
+    if (obj.type === 'Symbol' && obj.data && obj.data.timelineId) {
+      var symOverrides = evaluateTimeline(doc, obj.data.timelineId, frame);
+      for (var symObjId in symOverrides) {
+        if (!overrides[symObjId]) overrides[symObjId] = {};
+        for (var symKey in symOverrides[symObjId]) {
+          overrides[symObjId][symKey] = symOverrides[symObjId][symKey];
+        }
+      }
+    }
+
     // Children
     for (var j = 0; j < obj.children.length; j++) {
       var child = doc.objects[obj.children[j]];
-      renderNode(ctx, doc, child, worldM, opacity, overrides);
+      renderNode(ctx, doc, child, worldM, opacity, overrides, frame);
     }
   }
 
@@ -329,6 +340,28 @@ export const RUNTIME_JS = `
     if (scrub) {
       scrub.max = totalFrames - 1;
       scrub.addEventListener('input', function() { seek(parseInt(scrub.value)); });
+    }
+
+    // Scene switcher
+    var sceneSel = document.getElementById('scene-select');
+    if (doc.project.scenes.length > 1 && sceneSel) {
+      sceneSel.style.display = '';
+      for (var si = 0; si < doc.project.scenes.length; si++) {
+        var opt = document.createElement('option');
+        var sc = doc.scenes[doc.project.scenes[si]];
+        opt.value = doc.project.scenes[si];
+        opt.textContent = sc.name || ('Scene ' + (si + 1));
+        sceneSel.appendChild(opt);
+      }
+      sceneSel.addEventListener('change', function() {
+        sceneId = sceneSel.value;
+        var sc = doc.scenes[sceneId];
+        canvasEl.width = sc.width;
+        canvasEl.height = sc.height;
+        frame = 0;
+        render();
+        updateUI();
+      });
     }
 
     // Initial render

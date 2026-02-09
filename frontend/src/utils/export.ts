@@ -152,9 +152,12 @@ export async function exportVideo(
   formData.append("width", canvas.width.toString());
   formData.append("height", canvas.height.toString());
   formData.append("name", safeName);
+  formData.append("frameCount", totalFrames.toString());
 
+  const padLength = String(totalFrames - 1).length;
+  const pad = Math.max(padLength, 4);
   for (let i = 0; i < blobs.length; i++) {
-    const key = `frame_${i.toString().padStart(4, "0")}`;
+    const key = `frame_${i.toString().padStart(pad, "0")}`;
     formData.append(key, blobs[i], `${key}.png`);
   }
 
@@ -186,8 +189,11 @@ export async function exportVideo(
 /**
  * Prepare document for standalone export: convert asset URLs to base64 data URLs.
  */
-async function prepareDocumentForExport(doc: InDocument): Promise<InDocument> {
+async function prepareDocumentForExport(
+  doc: InDocument,
+): Promise<{ doc: InDocument; warnings: string[] }> {
   const exportDoc = JSON.parse(JSON.stringify(doc)) as InDocument;
+  const warnings: string[] = [];
 
   // Convert asset URLs to data URLs for portability
   for (const assetId of Object.keys(exportDoc.assets)) {
@@ -203,12 +209,12 @@ async function prepareDocumentForExport(doc: InDocument): Promise<InDocument> {
         });
         asset.url = dataUrl;
       } catch {
-        // Keep original URL if fetch fails
+        warnings.push(`Failed to embed asset: ${assetId}`);
       }
     }
   }
 
-  return exportDoc;
+  return { doc: exportDoc, warnings };
 }
 
 /**
@@ -217,6 +223,7 @@ async function prepareDocumentForExport(doc: InDocument): Promise<InDocument> {
 export async function exportHTML(
   doc: InDocument,
   onProgress?: (progress: ExportProgress) => void,
+  onWarning?: (message: string) => void,
 ): Promise<void> {
   const safeName =
     doc.project.name
@@ -226,7 +233,10 @@ export async function exportHTML(
 
   // Phase 1: Prepare document with embedded assets
   onProgress?.({ current: 1, total: 3, phase: "rendering" });
-  const exportDoc = await prepareDocumentForExport(doc);
+  const { doc: exportDoc, warnings } = await prepareDocumentForExport(doc);
+  for (const w of warnings) {
+    onWarning?.(w);
+  }
 
   // Phase 2: Generate files
   onProgress?.({ current: 2, total: 3, phase: "zipping" });
@@ -259,6 +269,7 @@ export async function exportHTML(
   <button id="play-btn">Play</button>
   <input type="range" id="scrubber" min="0" value="0" />
   <span id="frame-label">0 / 0</span>
+  <select id="scene-select" style="display:none;background:#333;color:#ccc;border:1px solid #555;border-radius:4px;padding:4px 8px;font-size:13px;"></select>
 </div>
 <script>window.__INAMATE_PROJECT__ = ${projectJson};</script>
 <script src="runtime.js"></script>

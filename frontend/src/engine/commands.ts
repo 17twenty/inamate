@@ -897,3 +897,56 @@ export function hitTestSubselection(
 
   return null;
 }
+
+/**
+ * Draw a dot grid overlay on the canvas.
+ * Uses a contrasting color based on background luminance.
+ */
+export function drawGrid(
+  ctx: CanvasRenderingContext2D,
+  width: number,
+  height: number,
+  gridSize: number,
+  dpr: number,
+  background: string,
+): void {
+  ctx.save();
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+  // Pick dot color based on background luminance
+  const isLight = isLightColor(background);
+  ctx.fillStyle = isLight ? "rgba(0, 0, 0, 0.15)" : "rgba(255, 255, 255, 0.2)";
+
+  const dotRadius = 0.75;
+  for (let x = gridSize; x < width; x += gridSize) {
+    for (let y = gridSize; y < height; y += gridSize) {
+      ctx.beginPath();
+      ctx.arc(x, y, dotRadius, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+
+  ctx.restore();
+}
+
+/** Rough luminance check for a hex/named color string. */
+function isLightColor(color: string): boolean {
+  // Parse hex colors
+  let r = 255,
+    g = 255,
+    b = 255;
+  if (color.startsWith("#")) {
+    const hex = color.slice(1);
+    if (hex.length === 3) {
+      r = parseInt(hex[0] + hex[0], 16);
+      g = parseInt(hex[1] + hex[1], 16);
+      b = parseInt(hex[2] + hex[2], 16);
+    } else if (hex.length >= 6) {
+      r = parseInt(hex.slice(0, 2), 16);
+      g = parseInt(hex.slice(2, 4), 16);
+      b = parseInt(hex.slice(4, 6), 16);
+    }
+  }
+  // Relative luminance approximation
+  return r * 0.299 + g * 0.587 + b * 0.114 > 150;
+}

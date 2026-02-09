@@ -20,6 +20,7 @@ import { MenuBar } from "../components/editor/MenuBar";
 import { getLatestSnapshot } from "../api/projects";
 import { API_BASE } from "../api/client";
 import { exportPngSequence, exportVideo, exportHTML } from "../utils/export";
+import { parseSVG } from "../utils/svgImport";
 
 import { MessageTypes } from "../types/protocol";
 import type { Message } from "../types/protocol";
@@ -78,9 +79,25 @@ export function EditorPage() {
   const [toast, setToast] = useState<string | null>(null);
   const [onionSkinEnabled, setOnionSkinEnabled] = useState(false);
   const [clipboard, setClipboard] = useState<ObjectNode[] | null>(null);
+  const [gridEnabled, setGridEnabled] = useState(false);
+  const [snapToGrid, setSnapToGrid] = useState(false);
+  const [gridSize, setGridSize] = useState(20);
+  const snapToGridRef = useRef(false);
+  const gridSizeRef = useRef(20);
+  snapToGridRef.current = snapToGrid;
+  gridSizeRef.current = gridSize;
+
+  // --- Toast helper ---
+  const showToast = useCallback((message: string, duration = 2000) => {
+    setToast(message);
+    setTimeout(() => setToast(null), duration);
+  }, []);
 
   // Editing context stack for nested Symbol editing
   const [editingStack, setEditingStack] = useState<EditingContext[]>([]);
+
+  // Track which Group the user has "entered" (double-clicked into)
+  const [enteredGroupId, setEnteredGroupId] = useState<string | null>(null);
 
   // Derived convenience for single-selection cases
   const singleSelectedId =
@@ -331,6 +348,11 @@ export function EditorPage() {
     stageRef.current.setSelectedObjectIds(selectedObjectIds);
   }, [selectedObjectIds]);
 
+  // Sync grid state to Stage
+  useEffect(() => {
+    stageRef.current.setGrid(gridEnabled, gridSize);
+  }, [gridEnabled, gridSize]);
+
   // Cursor presence send
   const sendCursor = useCallback(
     (x: number, y: number) => {
@@ -395,24 +417,51 @@ export function EditorPage() {
 
   // --- Canvas interaction callbacks ---
 
+  // Walk up from a hit object to find the top-level Group ancestor,
+  // respecting the "entered" group (double-click to edit children).
+  const resolveGroupAncestor = useCallback(
+    (objectId: string): string => {
+      if (!doc || !scene) return objectId;
+
+      let current = objectId;
+      while (true) {
+        const obj = doc.objects[current];
+        if (!obj || !obj.parent) return current;
+
+        // If we've "entered" this group, stop — select the child directly
+        if (obj.parent === enteredGroupId) return current;
+
+        // If parent is the scene root, this is the top-level object
+        if (obj.parent === scene.root) return current;
+
+        // Walk up
+        current = obj.parent;
+      }
+    },
+    [doc, scene, enteredGroupId],
+  );
+
   const handleObjectClick = useCallback(
     (objectId: string | null, shiftKey: boolean) => {
       if (objectId === null) {
         setSelectedObjectIds([]);
+        setEnteredGroupId(null);
         return;
       }
+
+      const resolved = resolveGroupAncestor(objectId);
+
       if (shiftKey) {
-        // Toggle in/out of selection
         setSelectedObjectIds((prev) =>
-          prev.includes(objectId)
-            ? prev.filter((id) => id !== objectId)
-            : [...prev, objectId],
+          prev.includes(resolved)
+            ? prev.filter((id) => id !== resolved)
+            : [...prev, resolved],
         );
       } else {
-        setSelectedObjectIds([objectId]);
+        setSelectedObjectIds([resolved]);
       }
     },
-    [],
+    [resolveGroupAncestor],
   );
 
   const handleMarqueeSelect = useCallback(
@@ -443,12 +492,21 @@ export function EditorPage() {
   const handleCanvasDoubleClick = useCallback(
     (objectId: string) => {
       if (!doc) return;
-      const obj = doc.objects[objectId];
-      if (obj && obj.type === "Symbol") {
-        handleEnterSymbol(objectId);
+
+      // Resolve to the group ancestor first
+      const resolved = resolveGroupAncestor(objectId);
+      const obj = doc.objects[resolved];
+      if (!obj) return;
+
+      if (obj.type === "Symbol") {
+        handleEnterSymbol(resolved);
+      } else if (obj.type === "Group") {
+        // Enter the group — now clicks will select children directly
+        setEnteredGroupId(resolved);
+        setSelectedObjectIds([objectId]);
       }
     },
-    [doc, handleEnterSymbol],
+    [doc, resolveGroupAncestor, handleEnterSymbol],
   );
 
   const handleDragStart = useCallback(
@@ -533,7 +591,14 @@ export function EditorPage() {
       for (const id of drag.objectIds) {
         const orig = drag.origTransforms.get(id);
         if (orig) {
-          overlayUpdates[id] = { ...orig, x: orig.x + dx, y: orig.y + dy };
+          let newX = orig.x + dx;
+          let newY = orig.y + dy;
+          if (snapToGridRef.current) {
+            const gs = gridSizeRef.current;
+            newX = Math.round(newX / gs) * gs;
+            newY = Math.round(newY / gs) * gs;
+          }
+          overlayUpdates[id] = { ...orig, x: newX, y: newY };
         }
       }
     } else {
@@ -1265,6 +1330,7 @@ export function EditorPage() {
       if (!doc) return;
       setActiveSceneId(sceneId);
       setSelectedObjectIds([]);
+      setEnteredGroupId(null);
       setEditingStack([
         { objectId: null, timelineId: doc.project.rootTimeline },
       ]);
@@ -1360,6 +1426,15 @@ export function EditorPage() {
     (x: number, y: number, tool: Tool) => {
       if (!doc || !scene) return;
 
+      // Snap creation position to grid if enabled
+      let cx = x;
+      let cy = y;
+      if (snapToGridRef.current) {
+        const gs = gridSizeRef.current;
+        cx = Math.round(cx / gs) * gs;
+        cy = Math.round(cy / gs) * gs;
+      }
+
       const objectId = crypto.randomUUID();
       const defaultSize = 100;
 
@@ -1378,8 +1453,8 @@ export function EditorPage() {
           parent: scene.root,
           children: [],
           transform: {
-            x,
-            y,
+            x: cx,
+            y: cy,
             sx: 1,
             sy: 1,
             r: 0,
@@ -1415,8 +1490,8 @@ export function EditorPage() {
           parent: scene.root,
           children: [],
           transform: {
-            x: x - defaultSize / 2,
-            y: y - defaultSize / 2,
+            x: cx - defaultSize / 2,
+            y: cy - defaultSize / 2,
             sx: 1,
             sy: 1,
             r: 0,
@@ -1674,6 +1749,142 @@ export function EditorPage() {
     return () => window.removeEventListener("paste", handlePaste);
   }, [doc, scene, uploadAndCreateImage]);
 
+  // --- SVG Import ---
+
+  const importSvgObjects = useCallback(
+    (svgText: string, atX?: number, atY?: number) => {
+      if (!doc || !scene) return;
+      const parsed = parseSVG(svgText);
+      if (parsed.length === 0) {
+        showToast("No supported shapes found in SVG");
+        return;
+      }
+
+      const createdIds: string[] = [];
+
+      if (parsed.length === 1) {
+        const item = parsed[0];
+        const objectId = crypto.randomUUID();
+        const t = item.transform;
+        const posX = atX ?? scene.width / 2;
+        const posY = atY ?? scene.height / 2;
+        const newObject: ObjectNode = {
+          id: objectId,
+          type: item.type,
+          parent: scene.root,
+          children: [],
+          transform: {
+            x: posX + t.x,
+            y: posY + t.y,
+            sx: t.sx,
+            sy: t.sy,
+            r: t.r,
+            ax: t.ax,
+            ay: t.ay,
+            skewX: t.skewX ?? 0,
+            skewY: t.skewY ?? 0,
+          },
+          style: item.style,
+          visible: true,
+          locked: false,
+          data: item.data as ObjectNode["data"],
+        };
+        commandDispatcher.dispatch({
+          type: "object.create",
+          object: newObject,
+          parentId: scene.root,
+        });
+        createdIds.push(objectId);
+      } else {
+        const groupId = crypto.randomUUID();
+        const groupX = atX ?? scene.width / 2;
+        const groupY = atY ?? scene.height / 2;
+
+        commandDispatcher.dispatch({
+          type: "object.create",
+          object: {
+            id: groupId,
+            type: "Group",
+            parent: scene.root,
+            children: [],
+            transform: {
+              x: groupX,
+              y: groupY,
+              sx: 1,
+              sy: 1,
+              r: 0,
+              ax: 0,
+              ay: 0,
+              skewX: 0,
+              skewY: 0,
+            },
+            style: { fill: "", stroke: "", strokeWidth: 0, opacity: 1 },
+            visible: true,
+            locked: false,
+            data: {},
+          },
+          parentId: scene.root,
+        });
+
+        for (let i = 0; i < parsed.length; i++) {
+          const item = parsed[i];
+          const objectId = crypto.randomUUID();
+          const t = item.transform;
+          commandDispatcher.dispatch({
+            type: "object.create",
+            object: {
+              id: objectId,
+              type: item.type,
+              parent: groupId,
+              children: [],
+              transform: {
+                x: t.x,
+                y: t.y,
+                sx: t.sx,
+                sy: t.sy,
+                r: t.r,
+                ax: t.ax,
+                ay: t.ay,
+                skewX: t.skewX ?? 0,
+                skewY: t.skewY ?? 0,
+              },
+              style: item.style,
+              visible: true,
+              locked: false,
+              data: item.data as ObjectNode["data"],
+            },
+            parentId: groupId,
+            index: i,
+          });
+        }
+
+        createdIds.push(groupId);
+      }
+
+      setSelectedObjectIds(createdIds);
+      setActiveTool("select");
+      showToast(`Imported ${parsed.length} element(s) from SVG`);
+    },
+    [doc, scene, showToast],
+  );
+
+  const handleImportSvg = useCallback(() => {
+    const input = document.createElement("input");
+    input.type = "file";
+    input.accept = ".svg,image/svg+xml";
+    input.onchange = () => {
+      const file = input.files?.[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = () => {
+        const svgText = reader.result as string;
+        importSvgObjects(svgText);
+      };
+      reader.readAsText(file);
+    };
+    input.click();
+  }, [importSvgObjects]);
+
   // Drag-and-drop handler for image files
   useEffect(() => {
     const container = containerRef.current;
@@ -1691,6 +1902,20 @@ export function EditorPage() {
       if (!files) return;
 
       for (const file of files) {
+        // SVG files: parse and import as vector objects
+        if (file.type === "image/svg+xml" || file.name.endsWith(".svg")) {
+          const reader = new FileReader();
+          reader.onload = () => {
+            const svgText = reader.result as string;
+            // Use drop position relative to scene (approximate center of canvas)
+            const rect = container.getBoundingClientRect();
+            const dropX = e.clientX - rect.left;
+            const dropY = e.clientY - rect.top;
+            importSvgObjects(svgText, dropX, dropY);
+          };
+          reader.readAsText(file);
+          return;
+        }
         if (file.type.startsWith("image/")) {
           uploadAndCreateImage(file);
           return; // One image at a time
@@ -1704,7 +1929,7 @@ export function EditorPage() {
       container.removeEventListener("dragover", handleDragOver);
       container.removeEventListener("drop", handleDrop);
     };
-  }, [doc, scene, uploadAndCreateImage]);
+  }, [doc, scene, uploadAndCreateImage, importSvgObjects]);
 
   // --- Keyframe handlers ---
 
@@ -2081,13 +2306,6 @@ export function EditorPage() {
     return () => window.removeEventListener("keydown", handleGroupKeys);
   }, [handleGroupSelection, handleUngroupSelection]);
 
-  // --- Toast helper ---
-
-  const showToast = useCallback((message: string, duration = 2000) => {
-    setToast(message);
-    setTimeout(() => setToast(null), duration);
-  }, []);
-
   // --- Copy & Paste handlers ---
 
   const handleCopySelection = useCallback(() => {
@@ -2329,6 +2547,48 @@ export function EditorPage() {
       window.removeEventListener("keydown", handleRecordKeyframeShortcut);
   }, [handleRecordKeyframe]);
 
+  // Import SVG shortcut (Cmd+I) + Grid/Snap shortcuts (G / Shift+G)
+  useEffect(() => {
+    const handleImportGridKeys = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement;
+      if (target.tagName === "INPUT" || target.tagName === "TEXTAREA") return;
+
+      // Cmd+I / Ctrl+I = Import SVG
+      if ((e.metaKey || e.ctrlKey) && e.key === "i") {
+        e.preventDefault();
+        handleImportSvg();
+        return;
+      }
+
+      // G = Toggle grid, Shift+G = Toggle snap (no modifiers)
+      if (!e.metaKey && !e.ctrlKey && !e.altKey) {
+        if (e.key === "G" && e.shiftKey) {
+          e.preventDefault();
+          setSnapToGrid((v) => !v);
+        } else if (e.key === "g" && !e.shiftKey) {
+          e.preventDefault();
+          setGridEnabled((v) => !v);
+        }
+      }
+    };
+
+    window.addEventListener("keydown", handleImportGridKeys);
+    return () => window.removeEventListener("keydown", handleImportGridKeys);
+  }, [handleImportSvg]);
+
+  // Escape exits entered group
+  useEffect(() => {
+    const handleEscape = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && enteredGroupId) {
+        e.preventDefault();
+        setSelectedObjectIds([enteredGroupId]);
+        setEnteredGroupId(null);
+      }
+    };
+    window.addEventListener("keydown", handleEscape);
+    return () => window.removeEventListener("keydown", handleEscape);
+  }, [enteredGroupId]);
+
   // Delete and Select All shortcuts
   useEffect(() => {
     const handleEditShortcuts = (e: KeyboardEvent) => {
@@ -2440,6 +2700,7 @@ export function EditorPage() {
       );
     } catch (error) {
       console.error("Export failed:", error);
+      showToast("PNG sequence export failed");
     } finally {
       // Restore previous state
       setExportProgress(null);
@@ -2447,7 +2708,7 @@ export function EditorPage() {
       stageRef.current.setSelectedObjectIds(previousSelection);
       stageRef.current.invalidate();
     }
-  }, [doc, scene, selectedObjectIds, currentFrame, totalFrames]);
+  }, [doc, scene, selectedObjectIds, currentFrame, totalFrames, showToast]);
 
   const handleExportVideo = useCallback(
     async (format: "mp4" | "gif" | "webm") => {
@@ -2473,6 +2734,7 @@ export function EditorPage() {
         );
       } catch (error) {
         console.error("Video export failed:", error);
+        showToast("Video export failed");
       } finally {
         setExportProgress(null);
         stageRef.current.seek(previousFrame);
@@ -2480,19 +2742,24 @@ export function EditorPage() {
         stageRef.current.invalidate();
       }
     },
-    [doc, scene, selectedObjectIds, currentFrame, totalFrames],
+    [doc, scene, selectedObjectIds, currentFrame, totalFrames, showToast],
   );
 
   const handleExportHTML = useCallback(async () => {
     if (!doc) return;
     try {
-      await exportHTML(doc, (p) => setExportProgress(p));
+      await exportHTML(
+        doc,
+        (p) => setExportProgress(p),
+        (msg) => showToast(msg, 4000),
+      );
     } catch (error) {
       console.error("HTML export failed:", error);
+      showToast("HTML export failed");
     } finally {
       setExportProgress(null);
     }
-  }, [doc]);
+  }, [doc, showToast]);
 
   const selectedObject = useMemo(() => {
     if (!doc || !singleSelectedId) return null;
@@ -2607,6 +2874,13 @@ export function EditorPage() {
         onPaste={handlePasteSelection}
         canPaste={clipboard !== null && clipboard.length > 0}
         onDuplicate={handleDuplicate}
+        onImportSvg={handleImportSvg}
+        gridEnabled={gridEnabled}
+        snapToGrid={snapToGrid}
+        gridSize={gridSize}
+        onToggleGrid={() => setGridEnabled((v) => !v)}
+        onToggleSnap={() => setSnapToGrid((v) => !v)}
+        onSetGridSize={setGridSize}
       />
 
       {/* Main editor area */}
