@@ -1,5 +1,6 @@
 import type { PathCommand, Asset } from "../types/document";
 import type { AnchorPoint } from "./pathUtils";
+import { API_BASE } from "../api/client";
 
 /**
  * DrawCommand represents a single drawing operation from the WASM engine.
@@ -31,9 +32,15 @@ export function setImageLoadedCallback(cb: (() => void) | null): void {
 
 function getCachedImage(url: string): HTMLImageElement | null {
   const existing = imageCache.get(url);
-  if (existing) return existing.complete ? existing : null;
+  if (existing) {
+    // complete is true both on success and failure — check naturalWidth to detect broken images
+    if (!existing.complete) return null;
+    if (existing.naturalWidth === 0) return null; // broken/failed
+    return existing;
+  }
 
   const img = new Image();
+  img.crossOrigin = "anonymous";
   img.onload = () => {
     onImageLoaded?.();
   };
@@ -190,7 +197,11 @@ function drawImage(ctx: CanvasRenderingContext2D, cmd: DrawCommand): void {
   const asset = currentAssets[cmd.imageAssetId];
   if (!asset) return;
 
-  const img = getCachedImage(asset.url);
+  // Resolve relative asset URLs against API_BASE for cross-origin deployments
+  const resolvedUrl = asset.url.startsWith("/")
+    ? `${API_BASE}${asset.url}`
+    : asset.url;
+  const img = getCachedImage(resolvedUrl);
   if (!img) return; // Not loaded yet — will appear on next frame
 
   ctx.save();
@@ -234,10 +245,7 @@ function buildPath(commands: PathCommand[]): Path2D {
   const path = new Path2D();
 
   for (const cmd of commands) {
-    if (cmd.length === 0) continue;
-
-    const op = cmd[0];
-    switch (op) {
+    switch (cmd[0]) {
       case "M":
         path.moveTo(cmd[1], cmd[2]);
         break;
@@ -269,10 +277,7 @@ export function getBoundsFromPath(pathCommands: PathCommand[]): Bounds {
   let maxY = -Infinity;
 
   for (const cmd of pathCommands) {
-    if (cmd.length === 0) continue;
-
-    const op = cmd[0];
-    switch (op) {
+    switch (cmd[0]) {
       case "M":
       case "L":
         minX = Math.min(minX, cmd[1]);

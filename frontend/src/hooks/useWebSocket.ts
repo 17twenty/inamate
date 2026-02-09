@@ -18,12 +18,20 @@ export function useWebSocket(
   useEffect(() => {
     if (!projectId) return;
 
-    const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-    const host = window.location.host;
+    // Use VITE_API_URL if set (cross-origin), otherwise same-origin
+    const apiUrl = import.meta.env.VITE_API_URL;
+    let wsBase: string;
+    if (apiUrl) {
+      // Convert http(s):// to ws(s)://
+      wsBase = apiUrl.replace(/^http/, "ws");
+    } else {
+      const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+      wsBase = `${protocol}//${window.location.host}`;
+    }
     // Token is optional - local mode works without auth
     const url = token
-      ? `${protocol}//${host}/ws/project/${projectId}?token=${token}`
-      : `${protocol}//${host}/ws/project/${projectId}`;
+      ? `${wsBase}/ws/project/${projectId}?token=${token}`
+      : `${wsBase}/ws/project/${projectId}`;
 
     let reconnectTimeout: ReturnType<typeof setTimeout>;
     let reconnectDelay = 1000;

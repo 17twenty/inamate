@@ -6,8 +6,10 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -98,6 +100,22 @@ func main() {
 	hub := collab.NewHub(docLoader, docSaver)
 	go hub.Run()
 
+	// Parse allowed origins into a set for CORS and WebSocket patterns
+	allowedOrigins := make(map[string]bool)
+	var wsOriginPatterns []string
+	for _, raw := range strings.Split(cfg.AllowedOrigins, ",") {
+		origin := strings.TrimSpace(raw)
+		if origin == "" {
+			continue
+		}
+		allowedOrigins[origin] = true
+		// Extract host:port for WebSocket OriginPatterns (e.g. "http://localhost:5173" → "localhost:5173")
+		if u, err := url.Parse(origin); err == nil {
+			wsOriginPatterns = append(wsOriginPatterns, u.Host)
+		}
+	}
+	slog.Info("allowed origins", "origins", cfg.AllowedOrigins)
+
 	assetHandler := asset.NewHandler(cfg.AssetDir)
 	exportHandler := export.NewHandler(cfg.FfmpegPath)
 
@@ -106,7 +124,7 @@ func main() {
 	// Global middleware
 	r.Use(mw.Recovery)
 	r.Use(mw.Logger)
-	r.Use(mw.CORS)
+	r.Use(mw.CORSWithOrigins(allowedOrigins))
 
 	// Auth routes (public)
 	r.HandleFunc("/auth/register", authHandler.Register).Methods("POST")
@@ -140,7 +158,7 @@ func main() {
 
 	// WebSocket endpoint
 	r.HandleFunc("/ws/project/{projectId}", func(w http.ResponseWriter, r *http.Request) {
-		handleWebSocket(w, r, hub, authService, queries)
+		handleWebSocket(w, r, hub, authService, queries, wsOriginPatterns)
 	})
 
 	addr := fmt.Sprintf(":%d", cfg.Port)
@@ -176,7 +194,7 @@ func main() {
 	}
 }
 
-func handleWebSocket(w http.ResponseWriter, r *http.Request, hub *collab.Hub, authSvc *auth.Service, queries *dbgen.Queries) {
+func handleWebSocket(w http.ResponseWriter, r *http.Request, hub *collab.Hub, authSvc *auth.Service, queries *dbgen.Queries, wsOriginPatterns []string) {
 	vars := mux.Vars(r)
 	projectID := vars["projectId"]
 
@@ -224,7 +242,7 @@ func handleWebSocket(w http.ResponseWriter, r *http.Request, hub *collab.Hub, au
 	}
 
 	conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{
-		OriginPatterns: []string{"localhost:5173", "localhost:3000"},
+		OriginPatterns: wsOriginPatterns,
 	})
 	if err != nil {
 		slog.Error("websocket accept", "error", err)

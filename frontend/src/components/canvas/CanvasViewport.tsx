@@ -100,7 +100,6 @@ export function CanvasViewport({
   docObjects,
 }: CanvasViewportProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const penOverlayRef = useRef<HTMLCanvasElement>(null);
 
   // Viewport state: pan offset and zoom level
   const [pan, setPan] = useState({ x: 0, y: 0 });
@@ -1146,13 +1145,7 @@ export function CanvasViewport({
       </div>
 
       {/* Cursor overlay - needs to account for pan/zoom */}
-      <CursorOverlay
-        canvasWidth={sceneWidth}
-        canvasHeight={sceneHeight}
-        containerRef={containerRef}
-        pan={pan}
-        zoom={zoom}
-      />
+      <CursorOverlay containerRef={containerRef} pan={pan} zoom={zoom} />
 
       {/* Zoom controls */}
       <div className="absolute bottom-4 right-4 flex items-center gap-1 rounded bg-gray-800/80 p-1">

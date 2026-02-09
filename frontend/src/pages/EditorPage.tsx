@@ -17,6 +17,7 @@ import { TimelinePanel } from "../components/editor/TimelinePanel";
 import type { BreadcrumbEntry } from "../components/editor/TimelinePanel";
 import { MenuBar } from "../components/editor/MenuBar";
 import { getLatestSnapshot } from "../api/projects";
+import { API_BASE } from "../api/client";
 import { exportPngSequence, exportVideo, exportHTML } from "../utils/export";
 
 import { MessageTypes } from "../types/protocol";
@@ -32,6 +33,8 @@ import type {
   InDocument,
   ObjectNode,
   Transform,
+  Style,
+  Scene,
   Keyframe,
   PathCommand,
   Asset,
@@ -73,6 +76,7 @@ export function EditorPage() {
   } | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const [onionSkinEnabled, setOnionSkinEnabled] = useState(false);
+  const [clipboard, setClipboard] = useState<ObjectNode[] | null>(null);
 
   // Editing context stack for nested Symbol editing
   const [editingStack, setEditingStack] = useState<EditingContext[]>([]);
@@ -993,7 +997,7 @@ export function EditorPage() {
   // --- Properties panel handlers ---
 
   const handleSceneUpdate = useCallback(
-    (changes: Partial<typeof scene>) => {
+    (changes: Partial<Scene>) => {
       if (!scene) return;
       commandDispatcher.dispatch({
         type: "scene.update",
@@ -1117,8 +1121,8 @@ export function EditorPage() {
     (
       objectId: string,
       changes: {
-        transform?: Partial<typeof selectedObject.transform>;
-        style?: Partial<typeof selectedObject.style>;
+        transform?: Partial<Transform>;
+        style?: Partial<Style>;
       },
     ) => {
       if (changes.transform) {
@@ -1367,7 +1371,7 @@ export function EditorPage() {
 
       let resp: Response;
       try {
-        resp = await fetch("/assets/upload", {
+        resp = await fetch(`${API_BASE}/assets/upload`, {
           method: "POST",
           body: formData,
         });
@@ -1877,6 +1881,121 @@ export function EditorPage() {
     setToast(message);
     setTimeout(() => setToast(null), duration);
   }, []);
+
+  // --- Copy & Paste handlers ---
+
+  const handleCopySelection = useCallback(() => {
+    if (selectedObjectIds.length === 0 || !doc) return;
+
+    // Recursively collect selected objects and all descendants
+    const collected = new Map<string, ObjectNode>();
+    const collectRecursive = (id: string) => {
+      const obj = doc.objects[id];
+      if (!obj || collected.has(id)) return;
+      collected.set(id, obj);
+      for (const childId of obj.children) {
+        collectRecursive(childId);
+      }
+    };
+    for (const id of selectedObjectIds) {
+      collectRecursive(id);
+    }
+
+    // Deep clone via JSON round-trip (ObjectNode is plain data)
+    const cloned: ObjectNode[] = JSON.parse(
+      JSON.stringify(Array.from(collected.values())),
+    );
+    setClipboard(cloned);
+    showToast(`Copied ${selectedObjectIds.length} object(s)`);
+  }, [selectedObjectIds, doc, showToast]);
+
+  const handlePasteSelection = useCallback(() => {
+    if (!clipboard || clipboard.length === 0 || !doc || !scene) return;
+
+    // Build old→new ID mapping
+    const idMap = new Map<string, string>();
+    for (const obj of clipboard) {
+      idMap.set(obj.id, crypto.randomUUID());
+    }
+
+    // Remap IDs, parents, children, and offset position
+    const remapped: ObjectNode[] = clipboard.map((obj) => {
+      const newId = idMap.get(obj.id)!;
+      const parentInClipboard = obj.parent && idMap.has(obj.parent);
+      return {
+        ...JSON.parse(JSON.stringify(obj)),
+        id: newId,
+        parent: parentInClipboard ? idMap.get(obj.parent!)! : scene.root,
+        children: obj.children
+          .map((cid) => idMap.get(cid))
+          .filter((id): id is string => id !== undefined),
+        transform: {
+          ...obj.transform,
+          x: obj.transform.x + 20,
+          y: obj.transform.y + 20,
+        },
+      };
+    });
+
+    // Dispatch creates in parent-first order (roots before children)
+    // Roots are objects whose parent is scene.root (not in idMap)
+    const roots = remapped.filter((obj) => obj.parent === scene.root);
+    const children = remapped.filter((obj) => obj.parent !== scene.root);
+
+    // Create roots first
+    for (const obj of roots) {
+      commandDispatcher.dispatch({
+        type: "object.create",
+        object: obj,
+        parentId: scene.root,
+      });
+    }
+    // Then children (their parents already exist)
+    for (const obj of children) {
+      commandDispatcher.dispatch({
+        type: "object.create",
+        object: obj,
+        parentId: obj.parent!,
+      });
+    }
+
+    // Select only the root-level pasted objects
+    setSelectedObjectIds(roots.map((obj) => obj.id));
+
+    // Update clipboard positions so next paste offsets further
+    setClipboard(
+      clipboard.map((obj) => ({
+        ...obj,
+        transform: {
+          ...obj.transform,
+          x: obj.transform.x + 20,
+          y: obj.transform.y + 20,
+        },
+      })),
+    );
+
+    showToast(`Pasted ${roots.length} object(s)`);
+  }, [clipboard, doc, scene, showToast]);
+
+  // Copy & Paste keyboard shortcuts
+  useEffect(() => {
+    const handleCopyPasteKeys = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement;
+      if (target.tagName === "INPUT" || target.tagName === "TEXTAREA") return;
+
+      if ((e.metaKey || e.ctrlKey) && e.key === "c") {
+        e.preventDefault();
+        handleCopySelection();
+      }
+      if ((e.metaKey || e.ctrlKey) && e.key === "v" && clipboard) {
+        e.preventDefault();
+        handlePasteSelection();
+      }
+    };
+
+    window.addEventListener("keydown", handleCopyPasteKeys);
+    return () => window.removeEventListener("keydown", handleCopyPasteKeys);
+  }, [handleCopySelection, handlePasteSelection, clipboard]);
 
   // --- Record Keyframe handler ---
 

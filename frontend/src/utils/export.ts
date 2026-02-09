@@ -6,6 +6,7 @@ import JSZip from "jszip";
 import type { Stage } from "../engine/Stage";
 import type { InDocument } from "../types/document";
 import { RUNTIME_JS } from "../engine/runtime";
+import { API_BASE } from "../api/client";
 
 export interface ExportProgress {
   current: number;
@@ -157,7 +158,7 @@ export async function exportVideo(
     formData.append(key, blobs[i], `${key}.png`);
   }
 
-  const response = await fetch("/export/video", {
+  const response = await fetch(`${API_BASE}/export/video`, {
     method: "POST",
     body: formData,
   });

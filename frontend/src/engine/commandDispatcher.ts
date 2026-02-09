@@ -33,6 +33,7 @@ import type {
   UpdateKeyframeOp,
   DeleteKeyframeOp,
 } from "../types/operations";
+import type { ObjectNode } from "../types/document";
 import type { Message } from "../types/protocol";
 
 // Maximum undo history size
@@ -790,7 +791,7 @@ class CommandDispatcher {
             [op.objectId]: {
               ...obj,
               data: { ...(obj.data as Record<string, unknown>), ...op.data },
-            },
+            } as ObjectNode,
           },
         });
         break;

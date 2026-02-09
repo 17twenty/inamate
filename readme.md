@@ -153,8 +153,15 @@ task setup
 task dev
 ```
 
-- **Frontend:** http://localhost:5173
+- **Frontend:** http://0.0.0.0:5173
 - **Backend API:** http://localhost:8080
+
+### Running behind Caddy
+
+```bash
+$ VITE_API_URL="https://inamate-api.your-domain.com" npm run build
+$ ALLOWED_ORIGINS="https://inamate.your-domain.com,https://0.0.0.0:5173" ./backend-go/bin/server
+```
 
 ### Commands
 

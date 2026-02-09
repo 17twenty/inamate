@@ -6,6 +6,4 @@ export type { DrawCommand } from "./commands";
 
 export * from "./wasmBridge";
 
-export { createSampleDocument } from "./sampleDocument";
-
 export { commandDispatcher } from "./commandDispatcher";

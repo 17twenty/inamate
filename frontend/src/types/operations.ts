@@ -226,10 +226,9 @@ export interface OperationBroadcast {
 // --- Helper Types ---
 
 // Operation without metadata (for dispatching)
-export type OperationInput<T extends Operation = Operation> = Omit<
-  T,
-  "id" | "timestamp" | "clientSeq"
->;
+// Distributive conditional ensures Omit applies to each union member individually
+export type OperationInput<T extends Operation = Operation> =
+  T extends Operation ? Omit<T, "id" | "timestamp" | "clientSeq"> : never;
 
 // Type guard helpers
 export function isTransformOp(op: Operation): op is TransformObjectOp {

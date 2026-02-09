@@ -2,16 +2,12 @@ import { useState, useEffect, useCallback } from "react";
 import { useEditorStore, type PresenceEntry } from "../../stores/editorStore";
 
 interface CursorOverlayProps {
-  canvasWidth: number;
-  canvasHeight: number;
   containerRef: React.RefObject<HTMLDivElement | null>;
   pan?: { x: number; y: number };
   zoom?: number;
 }
 
 export function CursorOverlay({
-  canvasWidth,
-  canvasHeight,
   containerRef,
   pan = { x: 0, y: 0 },
   zoom = 1,
