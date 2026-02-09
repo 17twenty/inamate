@@ -59,6 +59,12 @@ Figma uses a custom C++ renderer compiled to WASM with years of optimization. Fo
 3. **Lower overhead** — emitting a command buffer is O(nodes); software rasterization would be O(pixels) for every frame.
 4. **Browser optimizations** — we benefit from antialiasing, sub-pixel rendering, and compositing that browsers have spent years optimizing.
 
+### Transform & Coordinate Space Pipeline
+
+The frontend operates across two coordinate spaces: **world space** (post-transform, what you see on canvas) and **parent-local space** (where document mutations happen). Converting between them requires affine matrix inversion through the parent hierarchy. This pipeline powers alignment, distribution, snapping, and any spatial operation that needs to reason about screen positions while mutating local transforms.
+
+See [Transform Pipeline](readme-assets/transform-pipeline.md) for the full design, including renderer swapability.
+
 ### Project Structure
 
 ```
