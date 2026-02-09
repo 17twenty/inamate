@@ -11,6 +11,7 @@ import {
   type DragType,
 } from "../components/canvas/CanvasViewport";
 import type { Bounds } from "../engine/commands";
+import { invertMatrix, transformVector } from "../engine/commands";
 import { Toolbar, type Tool } from "../components/editor/Toolbar";
 import { PropertiesPanel } from "../components/editor/PropertiesPanel";
 import { TimelinePanel } from "../components/editor/TimelinePanel";
@@ -848,6 +849,168 @@ export function EditorPage() {
   const handleDeselect = useCallback(() => {
     setSelectedObjectIds([]);
   }, []);
+
+  // --- Alignment & Distribution ---
+
+  type AlignType = "left" | "right" | "top" | "bottom" | "centerH" | "centerV";
+
+  const handleAlign = useCallback(
+    (type: AlignType) => {
+      if (selectedObjectIds.length < 2) return;
+      const freshDoc = useEditorStore.getState().document;
+      if (!freshDoc) return;
+
+      const IDENTITY = [1, 0, 0, 1, 0, 0];
+
+      // Gather world bounds, animated local transform, and parent info
+      const items = selectedObjectIds
+        .map((id) => {
+          const bounds = stageRef.current.getObjectWorldBounds(id);
+          const animated = stageRef.current.getAnimatedTransform(id);
+          const obj = freshDoc.objects[id];
+          if (!bounds || !obj || obj.locked) return null;
+          const localX = animated?.x ?? obj.transform.x;
+          const localY = animated?.y ?? obj.transform.y;
+          const parentMatrix = obj.parent
+            ? (stageRef.current.getObjectWorldMatrix(obj.parent) ?? IDENTITY)
+            : IDENTITY;
+          const parentInv = invertMatrix(parentMatrix);
+          return { id, bounds, localX, localY, parentInv };
+        })
+        .filter((item): item is NonNullable<typeof item> => item !== null);
+
+      if (items.length < 2) return;
+
+      // Compute reference edge in world space
+      let ref: number;
+      switch (type) {
+        case "left":
+          ref = Math.min(...items.map((i) => i.bounds.minX));
+          break;
+        case "right":
+          ref = Math.max(...items.map((i) => i.bounds.maxX));
+          break;
+        case "top":
+          ref = Math.min(...items.map((i) => i.bounds.minY));
+          break;
+        case "bottom":
+          ref = Math.max(...items.map((i) => i.bounds.maxY));
+          break;
+        case "centerH": {
+          const minX = Math.min(...items.map((i) => i.bounds.minX));
+          const maxX = Math.max(...items.map((i) => i.bounds.maxX));
+          ref = (minX + maxX) / 2;
+          break;
+        }
+        case "centerV": {
+          const minY = Math.min(...items.map((i) => i.bounds.minY));
+          const maxY = Math.max(...items.map((i) => i.bounds.maxY));
+          ref = (minY + maxY) / 2;
+          break;
+        }
+      }
+
+      // Apply alignment: compute world delta, convert to local via inverse parent matrix
+      for (const item of items) {
+        let dxWorld = 0;
+        let dyWorld = 0;
+        const w = item.bounds.maxX - item.bounds.minX;
+        const h = item.bounds.maxY - item.bounds.minY;
+
+        switch (type) {
+          case "left":
+            dxWorld = ref - item.bounds.minX;
+            break;
+          case "right":
+            dxWorld = ref - item.bounds.maxX;
+            break;
+          case "top":
+            dyWorld = ref - item.bounds.minY;
+            break;
+          case "bottom":
+            dyWorld = ref - item.bounds.maxY;
+            break;
+          case "centerH":
+            dxWorld = ref - (item.bounds.minX + w / 2);
+            break;
+          case "centerV":
+            dyWorld = ref - (item.bounds.minY + h / 2);
+            break;
+        }
+
+        if (dxWorld === 0 && dyWorld === 0) continue;
+
+        // World delta → parent-local delta via inverse parent matrix
+        const localDelta = transformVector(dxWorld, dyWorld, item.parentInv);
+        updateTransformWithKeyframes(item.id, {
+          "transform.x": item.localX + localDelta.x,
+          "transform.y": item.localY + localDelta.y,
+        });
+      }
+    },
+    [selectedObjectIds, updateTransformWithKeyframes],
+  );
+
+  const handleDistribute = useCallback(
+    (axis: "horizontal" | "vertical") => {
+      if (selectedObjectIds.length < 3) return;
+      const freshDoc = useEditorStore.getState().document;
+      if (!freshDoc) return;
+
+      const IDENTITY = [1, 0, 0, 1, 0, 0];
+
+      const items = selectedObjectIds
+        .map((id) => {
+          const bounds = stageRef.current.getObjectWorldBounds(id);
+          const animated = stageRef.current.getAnimatedTransform(id);
+          const obj = freshDoc.objects[id];
+          if (!bounds || !obj || obj.locked) return null;
+          const localX = animated?.x ?? obj.transform.x;
+          const localY = animated?.y ?? obj.transform.y;
+          const parentMatrix = obj.parent
+            ? (stageRef.current.getObjectWorldMatrix(obj.parent) ?? IDENTITY)
+            : IDENTITY;
+          const parentInv = invertMatrix(parentMatrix);
+          const cx = (bounds.minX + bounds.maxX) / 2;
+          const cy = (bounds.minY + bounds.maxY) / 2;
+          return { id, localX, localY, parentInv, cx, cy };
+        })
+        .filter((item): item is NonNullable<typeof item> => item !== null);
+
+      if (items.length < 3) return;
+
+      if (axis === "horizontal") {
+        items.sort((a, b) => a.cx - b.cx);
+        const first = items[0].cx;
+        const last = items[items.length - 1].cx;
+        const step = (last - first) / (items.length - 1);
+        for (let i = 1; i < items.length - 1; i++) {
+          const dxWorld = first + step * i - items[i].cx;
+          if (dxWorld === 0) continue;
+          const localDelta = transformVector(dxWorld, 0, items[i].parentInv);
+          updateTransformWithKeyframes(items[i].id, {
+            "transform.x": items[i].localX + localDelta.x,
+            "transform.y": items[i].localY + localDelta.y,
+          });
+        }
+      } else {
+        items.sort((a, b) => a.cy - b.cy);
+        const first = items[0].cy;
+        const last = items[items.length - 1].cy;
+        const step = (last - first) / (items.length - 1);
+        for (let i = 1; i < items.length - 1; i++) {
+          const dyWorld = first + step * i - items[i].cy;
+          if (dyWorld === 0) continue;
+          const localDelta = transformVector(0, dyWorld, items[i].parentInv);
+          updateTransformWithKeyframes(items[i].id, {
+            "transform.x": items[i].localX + localDelta.x,
+            "transform.y": items[i].localY + localDelta.y,
+          });
+        }
+      }
+    },
+    [selectedObjectIds, updateTransformWithKeyframes],
+  );
 
   // --- Group / Ungroup ---
 
@@ -1977,9 +2140,19 @@ export function EditorPage() {
     showToast(`Pasted ${roots.length} object(s)`);
   }, [clipboard, doc, scene, showToast]);
 
-  // Copy & Paste keyboard shortcuts
+  const handleCutSelection = useCallback(() => {
+    handleCopySelection();
+    handleDeleteObject();
+  }, [handleCopySelection, handleDeleteObject]);
+
+  const handleDuplicate = useCallback(() => {
+    handleCopySelection();
+    handlePasteSelection();
+  }, [handleCopySelection, handlePasteSelection]);
+
+  // Copy, Cut, Paste, Duplicate keyboard shortcuts
   useEffect(() => {
-    const handleCopyPasteKeys = (e: KeyboardEvent) => {
+    const handleClipboardKeys = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement;
       if (target.tagName === "INPUT" || target.tagName === "TEXTAREA") return;
 
@@ -1987,15 +2160,69 @@ export function EditorPage() {
         e.preventDefault();
         handleCopySelection();
       }
+      if ((e.metaKey || e.ctrlKey) && e.key === "x") {
+        e.preventDefault();
+        handleCutSelection();
+      }
       if ((e.metaKey || e.ctrlKey) && e.key === "v" && clipboard) {
         e.preventDefault();
         handlePasteSelection();
       }
+      if ((e.metaKey || e.ctrlKey) && e.key === "d") {
+        e.preventDefault();
+        handleDuplicate();
+      }
     };
 
-    window.addEventListener("keydown", handleCopyPasteKeys);
-    return () => window.removeEventListener("keydown", handleCopyPasteKeys);
-  }, [handleCopySelection, handlePasteSelection, clipboard]);
+    window.addEventListener("keydown", handleClipboardKeys);
+    return () => window.removeEventListener("keydown", handleClipboardKeys);
+  }, [
+    handleCopySelection,
+    handleCutSelection,
+    handlePasteSelection,
+    handleDuplicate,
+    clipboard,
+  ]);
+
+  // Arrow key nudge (1px, or 10px with Shift)
+  useEffect(() => {
+    const handleNudge = (e: KeyboardEvent) => {
+      if (!["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(e.key))
+        return;
+      if (e.metaKey || e.ctrlKey) return;
+
+      const target = e.target as HTMLElement;
+      if (target.tagName === "INPUT" || target.tagName === "TEXTAREA") return;
+
+      const freshDoc = useEditorStore.getState().document;
+      if (!freshDoc || selectedObjectIds.length === 0) return;
+
+      const step = e.shiftKey ? 10 : 1;
+      const dx =
+        e.key === "ArrowLeft" ? -step : e.key === "ArrowRight" ? step : 0;
+      const dy = e.key === "ArrowUp" ? -step : e.key === "ArrowDown" ? step : 0;
+
+      e.preventDefault();
+      for (const id of selectedObjectIds) {
+        const obj = freshDoc.objects[id];
+        if (!obj || obj.locked) continue;
+
+        // Get animated transform from WASM (respects keyframes at current frame)
+        const animated = stageRef.current.getAnimatedTransform(id);
+        const currentX = animated?.x ?? obj.transform.x;
+        const currentY = animated?.y ?? obj.transform.y;
+
+        // Use updateTransformWithKeyframes to handle both keyframed and base transforms
+        updateTransformWithKeyframes(id, {
+          "transform.x": currentX + dx,
+          "transform.y": currentY + dy,
+        });
+      }
+    };
+
+    window.addEventListener("keydown", handleNudge);
+    return () => window.removeEventListener("keydown", handleNudge);
+  }, [selectedObjectIds, updateTransformWithKeyframes]);
 
   // --- Record Keyframe handler ---
 
@@ -2122,16 +2349,22 @@ export function EditorPage() {
     });
   }, [doc, scene, selectedObjectIds, currentFrame]);
 
+  const zoomFnsRef = useRef<{
+    zoomIn: () => void;
+    zoomOut: () => void;
+    fitToScreen: () => void;
+  } | null>(null);
+
   const handleZoomIn = useCallback(() => {
-    // Placeholder
+    zoomFnsRef.current?.zoomIn();
   }, []);
 
   const handleZoomOut = useCallback(() => {
-    // Placeholder
+    zoomFnsRef.current?.zoomOut();
   }, []);
 
   const handleFitToScreen = useCallback(() => {
-    // Placeholder
+    zoomFnsRef.current?.fitToScreen();
   }, []);
 
   // Total frames for the currently-editing timeline
@@ -2322,6 +2555,15 @@ export function EditorPage() {
           selectedObjectIds.length === 1 &&
           doc.objects[selectedObjectIds[0]]?.type === "Group"
         }
+        onUndo={() => commandDispatcher.undo()}
+        onRedo={() => commandDispatcher.redo()}
+        canUndo={commandDispatcher.canUndo()}
+        canRedo={commandDispatcher.canRedo()}
+        onCut={handleCutSelection}
+        onCopy={handleCopySelection}
+        onPaste={handlePasteSelection}
+        canPaste={clipboard !== null && clipboard.length > 0}
+        onDuplicate={handleDuplicate}
       />
 
       {/* Main editor area */}
@@ -2355,6 +2597,9 @@ export function EditorPage() {
             selectedObjects={selectedObjectsMap}
             onDataUpdate={handleDataUpdate}
             docObjects={doc.objects}
+            onZoomFunctionsReady={(fns) => {
+              zoomFnsRef.current = fns;
+            }}
           />
         </div>
 
@@ -2367,6 +2612,8 @@ export function EditorPage() {
             onSceneUpdate={handleSceneUpdate}
             onObjectUpdate={handleObjectUpdate}
             onDataUpdate={handleDataUpdate}
+            onAlign={handleAlign}
+            onDistribute={handleDistribute}
           />
         )}
       </div>

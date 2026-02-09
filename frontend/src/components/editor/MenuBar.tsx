@@ -49,6 +49,17 @@ interface MenuBarProps {
   onUngroup?: () => void;
   canGroup?: boolean;
   canUngroup?: boolean;
+  // Undo/Redo
+  onUndo?: () => void;
+  onRedo?: () => void;
+  canUndo?: boolean;
+  canRedo?: boolean;
+  // Clipboard
+  onCut?: () => void;
+  onCopy?: () => void;
+  onPaste?: () => void;
+  canPaste?: boolean;
+  onDuplicate?: () => void;
 }
 
 export function MenuBar({
@@ -80,6 +91,15 @@ export function MenuBar({
   onUngroup,
   canGroup,
   canUngroup,
+  onUndo,
+  onRedo,
+  canUndo,
+  canRedo,
+  onCut,
+  onCopy,
+  onPaste,
+  canPaste,
+  onDuplicate,
 }: MenuBarProps) {
   const [openMenu, setOpenMenu] = useState<string | null>(null);
   const barRef = useRef<HTMLDivElement>(null);
@@ -138,12 +158,39 @@ export function MenuBar({
         {
           label: "Undo",
           shortcut: isMac() ? "Cmd+Z" : "Ctrl+Z",
-          disabled: true,
+          action: onUndo,
+          disabled: !canUndo,
         },
         {
           label: "Redo",
           shortcut: isMac() ? "Cmd+Shift+Z" : "Ctrl+Y",
-          disabled: true,
+          action: onRedo,
+          disabled: !canRedo,
+        },
+        { separator: true },
+        {
+          label: "Cut",
+          shortcut: isMac() ? "Cmd+X" : "Ctrl+X",
+          action: onCut,
+          disabled: !hasSelection,
+        },
+        {
+          label: "Copy",
+          shortcut: isMac() ? "Cmd+C" : "Ctrl+C",
+          action: onCopy,
+          disabled: !hasSelection,
+        },
+        {
+          label: "Paste",
+          shortcut: isMac() ? "Cmd+V" : "Ctrl+V",
+          action: onPaste,
+          disabled: !canPaste,
+        },
+        {
+          label: "Duplicate",
+          shortcut: isMac() ? "Cmd+D" : "Ctrl+D",
+          action: onDuplicate,
+          disabled: !hasSelection,
         },
         { separator: true },
         {

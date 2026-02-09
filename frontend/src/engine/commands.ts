@@ -310,7 +310,10 @@ export function getBoundsFromPath(pathCommands: PathCommand[]): Bounds {
 }
 
 /**
- * Transform a point using an affine transform matrix.
+ * Transform a point using an affine transform matrix [a, b, c, d, e, f].
+ * Matrix layout:  | a  c  e |
+ *                 | b  d  f |
+ *                 | 0  0  1 |
  */
 export function transformPoint(
   x: number,
@@ -322,6 +325,52 @@ export function transformPoint(
     x: a * x + c * y + e,
     y: b * x + d * y + f,
   };
+}
+
+/**
+ * Transform a direction vector (no translation) through an affine matrix.
+ * Use this for converting deltas between coordinate spaces.
+ */
+export function transformVector(
+  dx: number,
+  dy: number,
+  m: number[],
+): { x: number; y: number } {
+  const [a, b, c, d] = m;
+  return { x: a * dx + c * dy, y: b * dx + d * dy };
+}
+
+/**
+ * Invert a 2D affine matrix. Returns identity if not invertible.
+ * Ported from backend-go/internal/engine/matrix.go.
+ */
+export function invertMatrix(m: number[]): number[] {
+  const [a, b, c, d, e, f] = m;
+  const det = a * d - b * c;
+  if (det === 0) return [1, 0, 0, 1, 0, 0];
+  const invDet = 1 / det;
+  return [
+    d * invDet,
+    -b * invDet,
+    -c * invDet,
+    a * invDet,
+    (c * f - d * e) * invDet,
+    (b * e - a * f) * invDet,
+  ];
+}
+
+/**
+ * Multiply two 2D affine matrices: result = a × b.
+ */
+export function multiplyMatrices(a: number[], b: number[]): number[] {
+  return [
+    a[0] * b[0] + a[2] * b[1],
+    a[1] * b[0] + a[3] * b[1],
+    a[0] * b[2] + a[2] * b[3],
+    a[1] * b[2] + a[3] * b[3],
+    a[0] * b[4] + a[2] * b[5] + a[4],
+    a[1] * b[4] + a[3] * b[5] + a[5],
+  ];
 }
 
 /**

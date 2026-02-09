@@ -71,6 +71,12 @@ interface CanvasViewportProps {
   onDataUpdate?: (objectId: string, data: Record<string, unknown>) => void;
   // All document objects (for locked checks)
   docObjects?: Record<string, ObjectNode>;
+  // Expose zoom functions to parent
+  onZoomFunctionsReady?: (fns: {
+    zoomIn: () => void;
+    zoomOut: () => void;
+    fitToScreen: () => void;
+  }) => void;
 }
 
 const MIN_ZOOM = 0.1;
@@ -98,6 +104,7 @@ export function CanvasViewport({
   selectedObjects,
   onDataUpdate,
   docObjects,
+  onZoomFunctionsReady,
 }: CanvasViewportProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
@@ -918,6 +925,15 @@ export function CanvasViewport({
       y: (rect.height - sceneHeight * newZoom) / 2,
     });
   }, [containerRef, sceneWidth, sceneHeight]);
+
+  // Expose zoom functions to parent component
+  useEffect(() => {
+    onZoomFunctionsReady?.({
+      zoomIn: handleZoomIn,
+      zoomOut: handleZoomOut,
+      fitToScreen: handleFitToScreen,
+    });
+  }, [onZoomFunctionsReady, handleZoomIn, handleZoomOut, handleFitToScreen]);
 
   return (
     <div

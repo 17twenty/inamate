@@ -424,6 +424,15 @@ export class Stage {
     return getWorldBounds(cmd);
   }
 
+  /**
+   * Get the full world-space affine matrix [a,b,c,d,e,f] for an object.
+   * This is the composed parent chain matrix from the last render.
+   */
+  getObjectWorldMatrix(objectId: string): number[] | null {
+    const cmd = this.lastCommands.find((c) => c.objectId === objectId);
+    return cmd?.transform ?? null;
+  }
+
   // --- Private Methods ---
 
   private updateFrameInterval(): void {

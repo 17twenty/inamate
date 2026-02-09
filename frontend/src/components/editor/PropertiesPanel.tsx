@@ -9,6 +9,8 @@ import type {
   RasterImageData,
 } from "../../types/document";
 
+type AlignType = "left" | "right" | "top" | "bottom" | "centerH" | "centerV";
+
 interface PropertiesPanelProps {
   selectedObject: ObjectNode | null;
   selectedCount?: number;
@@ -19,6 +21,8 @@ interface PropertiesPanelProps {
     changes: { transform?: Partial<Transform>; style?: Partial<Style> },
   ) => void;
   onDataUpdate?: (objectId: string, data: Record<string, unknown>) => void;
+  onAlign?: (type: AlignType) => void;
+  onDistribute?: (axis: "horizontal" | "vertical") => void;
 }
 
 export function PropertiesPanel({
@@ -28,17 +32,181 @@ export function PropertiesPanel({
   onSceneUpdate,
   onObjectUpdate,
   onDataUpdate,
+  onAlign,
+  onDistribute,
 }: PropertiesPanelProps) {
-  // Show multi-select summary when multiple objects are selected
+  // Show multi-select summary with alignment tools
   if (!selectedObject && selectedCount > 1) {
     return (
       <div className="w-56 border-l border-gray-800 bg-gray-900 p-3">
         <h3 className="mb-2 text-xs font-semibold uppercase tracking-wider text-gray-500">
           Properties
         </h3>
-        <p className="text-xs text-gray-400">
+        <p className="mb-3 text-xs text-gray-400">
           {selectedCount} objects selected
         </p>
+
+        <Section title="Align">
+          <div className="grid grid-cols-3 gap-1">
+            <AlignButton
+              label="Align Left"
+              onClick={() => onAlign?.("left")}
+              icon={
+                <svg
+                  width="16"
+                  height="16"
+                  viewBox="0 0 16 16"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.5"
+                >
+                  <line x1="2" y1="1" x2="2" y2="15" />
+                  <rect x="4" y="3" width="8" height="4" rx="0.5" />
+                  <rect x="4" y="9" width="5" height="4" rx="0.5" />
+                </svg>
+              }
+            />
+            <AlignButton
+              label="Align Center H"
+              onClick={() => onAlign?.("centerH")}
+              icon={
+                <svg
+                  width="16"
+                  height="16"
+                  viewBox="0 0 16 16"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.5"
+                >
+                  <line x1="8" y1="1" x2="8" y2="15" strokeDasharray="2 1" />
+                  <rect x="3" y="3" width="10" height="4" rx="0.5" />
+                  <rect x="4.5" y="9" width="7" height="4" rx="0.5" />
+                </svg>
+              }
+            />
+            <AlignButton
+              label="Align Right"
+              onClick={() => onAlign?.("right")}
+              icon={
+                <svg
+                  width="16"
+                  height="16"
+                  viewBox="0 0 16 16"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.5"
+                >
+                  <line x1="14" y1="1" x2="14" y2="15" />
+                  <rect x="4" y="3" width="8" height="4" rx="0.5" />
+                  <rect x="7" y="9" width="5" height="4" rx="0.5" />
+                </svg>
+              }
+            />
+            <AlignButton
+              label="Align Top"
+              onClick={() => onAlign?.("top")}
+              icon={
+                <svg
+                  width="16"
+                  height="16"
+                  viewBox="0 0 16 16"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.5"
+                >
+                  <line x1="1" y1="2" x2="15" y2="2" />
+                  <rect x="3" y="4" width="4" height="8" rx="0.5" />
+                  <rect x="9" y="4" width="4" height="5" rx="0.5" />
+                </svg>
+              }
+            />
+            <AlignButton
+              label="Align Center V"
+              onClick={() => onAlign?.("centerV")}
+              icon={
+                <svg
+                  width="16"
+                  height="16"
+                  viewBox="0 0 16 16"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.5"
+                >
+                  <line x1="1" y1="8" x2="15" y2="8" strokeDasharray="2 1" />
+                  <rect x="3" y="3" width="4" height="10" rx="0.5" />
+                  <rect x="9" y="4.5" width="4" height="7" rx="0.5" />
+                </svg>
+              }
+            />
+            <AlignButton
+              label="Align Bottom"
+              onClick={() => onAlign?.("bottom")}
+              icon={
+                <svg
+                  width="16"
+                  height="16"
+                  viewBox="0 0 16 16"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.5"
+                >
+                  <line x1="1" y1="14" x2="15" y2="14" />
+                  <rect x="3" y="4" width="4" height="8" rx="0.5" />
+                  <rect x="9" y="7" width="4" height="5" rx="0.5" />
+                </svg>
+              }
+            />
+          </div>
+        </Section>
+
+        <Section title="Distribute">
+          <div className="grid grid-cols-2 gap-1">
+            <AlignButton
+              label="Distribute Horizontally"
+              onClick={() => onDistribute?.("horizontal")}
+              disabled={selectedCount < 3}
+              icon={
+                <svg
+                  width="16"
+                  height="16"
+                  viewBox="0 0 16 16"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.5"
+                >
+                  <line x1="2" y1="1" x2="2" y2="15" />
+                  <line x1="8" y1="1" x2="8" y2="15" strokeDasharray="2 1" />
+                  <line x1="14" y1="1" x2="14" y2="15" />
+                  <rect x="1" y="5" width="3" height="6" rx="0.5" />
+                  <rect x="6.5" y="5" width="3" height="6" rx="0.5" />
+                  <rect x="12" y="5" width="3" height="6" rx="0.5" />
+                </svg>
+              }
+            />
+            <AlignButton
+              label="Distribute Vertically"
+              onClick={() => onDistribute?.("vertical")}
+              disabled={selectedCount < 3}
+              icon={
+                <svg
+                  width="16"
+                  height="16"
+                  viewBox="0 0 16 16"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.5"
+                >
+                  <line x1="1" y1="2" x2="15" y2="2" />
+                  <line x1="1" y1="8" x2="15" y2="8" strokeDasharray="2 1" />
+                  <line x1="1" y1="14" x2="15" y2="14" />
+                  <rect x="5" y="1" width="6" height="3" rx="0.5" />
+                  <rect x="5" y="6.5" width="6" height="3" rx="0.5" />
+                  <rect x="5" y="12" width="6" height="3" rx="0.5" />
+                </svg>
+              }
+            />
+          </div>
+        </Section>
       </div>
     );
   }
@@ -454,5 +622,32 @@ function ColorPropRow({
         disabled={isNone || disabled}
       />
     </div>
+  );
+}
+
+function AlignButton({
+  label,
+  icon,
+  onClick,
+  disabled = false,
+}: {
+  label: string;
+  icon: React.ReactNode;
+  onClick: () => void;
+  disabled?: boolean;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      title={label}
+      disabled={disabled}
+      className={`flex h-7 items-center justify-center rounded transition ${
+        disabled
+          ? "text-gray-600 cursor-not-allowed"
+          : "text-gray-400 hover:bg-gray-800 hover:text-white"
+      }`}
+    >
+      {icon}
+    </button>
   );
 }
