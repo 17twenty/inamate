@@ -7,7 +7,7 @@ import { API_BASE } from "../api/client";
  * The frontend executes these on a Canvas2D context.
  */
 export interface DrawCommand {
-  op: "path" | "image" | "save" | "restore" | "clip";
+  op: "path" | "image" | "text" | "save" | "restore" | "clip";
   objectId?: string;
   transform?: number[]; // [a, b, c, d, e, f] affine matrix
   path?: PathCommand[];
@@ -18,6 +18,12 @@ export interface DrawCommand {
   imageAssetId?: string;
   imageWidth?: number;
   imageHeight?: number;
+  // Text rendering
+  textContent?: string;
+  textFontSize?: number;
+  textFontFamily?: string;
+  textFontWeight?: string;
+  textAlign?: string;
 }
 
 // Module-level image cache: URL -> HTMLImageElement
@@ -128,6 +134,9 @@ export function executeCommandsNoClear(
       case "image":
         drawImage(ctx, cmd);
         break;
+      case "text":
+        drawText(ctx, cmd);
+        break;
     }
   }
 }
@@ -217,6 +226,57 @@ function drawImage(ctx: CanvasRenderingContext2D, cmd: DrawCommand): void {
   ctx.drawImage(img, 0, 0, cmd.imageWidth, cmd.imageHeight);
 
   ctx.restore();
+}
+
+/**
+ * Draw a text command using Canvas2D fillText/strokeText.
+ */
+function drawText(ctx: CanvasRenderingContext2D, cmd: DrawCommand): void {
+  if (!cmd.textContent || !cmd.textFontSize) return;
+
+  ctx.save();
+
+  if (cmd.transform) {
+    applyTransform(ctx, cmd.transform);
+  }
+
+  if (cmd.opacity !== undefined) {
+    ctx.globalAlpha = cmd.opacity;
+  }
+
+  const weight = cmd.textFontWeight || "normal";
+  const family = cmd.textFontFamily || "sans-serif";
+  ctx.font = `${weight} ${cmd.textFontSize}px ${family}`;
+  ctx.textAlign = (cmd.textAlign as CanvasTextAlign) || "left";
+  ctx.textBaseline = "top";
+
+  if (cmd.fill && cmd.fill !== "none") {
+    ctx.fillStyle = cmd.fill;
+    ctx.fillText(cmd.textContent, 0, 0);
+  }
+
+  if (
+    cmd.stroke &&
+    cmd.stroke !== "none" &&
+    cmd.strokeWidth &&
+    cmd.strokeWidth > 0
+  ) {
+    ctx.strokeStyle = cmd.stroke;
+    ctx.lineWidth = cmd.strokeWidth;
+    ctx.strokeText(cmd.textContent, 0, 0);
+  }
+
+  ctx.restore();
+}
+
+// Module-level offscreen context for text measurement
+let measureCtx: OffscreenCanvasRenderingContext2D | null = null;
+function getMeasureCtx(): OffscreenCanvasRenderingContext2D {
+  if (!measureCtx) {
+    const canvas = new OffscreenCanvas(1, 1);
+    measureCtx = canvas.getContext("2d")!;
+  }
+  return measureCtx;
 }
 
 /**
@@ -381,7 +441,19 @@ export function getWorldBounds(cmd: DrawCommand): Bounds | null {
 
   let localBounds: Bounds;
 
-  if (
+  if (cmd.op === "text" && cmd.textContent && cmd.textFontSize) {
+    const mCtx = getMeasureCtx();
+    const weight = cmd.textFontWeight || "normal";
+    const family = cmd.textFontFamily || "sans-serif";
+    mCtx.font = `${weight} ${cmd.textFontSize}px ${family}`;
+    const metrics = mCtx.measureText(cmd.textContent);
+    localBounds = {
+      minX: 0,
+      minY: 0,
+      maxX: metrics.width,
+      maxY: cmd.textFontSize * 1.2,
+    };
+  } else if (
     cmd.op === "image" &&
     cmd.imageAssetId &&
     cmd.imageWidth &&
@@ -437,9 +509,20 @@ function getTransformedCorners(cmd: DrawCommand): {
 
   const isImage =
     cmd.op === "image" && cmd.imageAssetId && cmd.imageWidth && cmd.imageHeight;
+  const isText = cmd.op === "text" && cmd.textContent && cmd.textFontSize;
 
   let lMinX: number, lMinY: number, lMaxX: number, lMaxY: number;
-  if (isImage) {
+  if (isText) {
+    const mCtx = getMeasureCtx();
+    const weight = cmd.textFontWeight || "normal";
+    const family = cmd.textFontFamily || "sans-serif";
+    mCtx.font = `${weight} ${cmd.textFontSize!}px ${family}`;
+    const metrics = mCtx.measureText(cmd.textContent!);
+    lMinX = 0;
+    lMinY = 0;
+    lMaxX = metrics.width;
+    lMaxY = cmd.textFontSize! * 1.2;
+  } else if (isImage) {
     lMinX = 0;
     lMinY = 0;
     lMaxX = cmd.imageWidth!;

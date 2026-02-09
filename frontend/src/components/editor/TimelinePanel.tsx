@@ -81,7 +81,7 @@ const MAX_PANEL_HEIGHT = 400;
 const FRAME_WIDTH = 12;
 
 // Animatable properties configuration
-const ANIMATABLE_PROPERTIES = [
+const BASE_PROPERTIES = [
   { key: "transform.x", label: "Position X", short: "X" },
   { key: "transform.y", label: "Position Y", short: "Y" },
   { key: "transform.sx", label: "Scale X", short: "SX" },
@@ -94,6 +94,25 @@ const ANIMATABLE_PROPERTIES = [
   { key: "style.stroke", label: "Stroke", short: "S" },
   { key: "style.strokeWidth", label: "Stroke W", short: "SW" },
 ] as const;
+
+const TEXT_PROPERTIES = [
+  { key: "data.fontSize", label: "Font Size", short: "FS" },
+  { key: "data.content", label: "Content", short: "Tx" },
+  { key: "data.fontFamily", label: "Font", short: "Ff" },
+  { key: "data.fontWeight", label: "Weight", short: "Fw" },
+  { key: "data.textAlign", label: "Align", short: "Al" },
+] as const;
+
+type AnimatableProperty = { key: string; label: string; short: string };
+
+function getAnimatableProperties(
+  objectType: string,
+): readonly AnimatableProperty[] {
+  if (objectType === "Text") {
+    return [...BASE_PROPERTIES, ...TEXT_PROPERTIES];
+  }
+  return BASE_PROPERTIES;
+}
 
 // CSS background for grid lines — renders the grid without DOM elements
 function gridBackground(totalFrames: number): React.CSSProperties {
@@ -1000,7 +1019,7 @@ export function TimelinePanel({
 
                   {/* Property sub-rows (when expanded) */}
                   {isExpanded &&
-                    ANIMATABLE_PROPERTIES.map((prop) => {
+                    getAnimatableProperties(obj.type).map((prop) => {
                       const propKeyframes = objProps?.get(prop.key);
                       const hasKeyframes =
                         propKeyframes && propKeyframes.size > 0;
@@ -1263,6 +1282,8 @@ function typeIcon(type_: string): string {
       return "\u25A3";
     case "Symbol":
       return "\u29C9";
+    case "Text":
+      return "T";
     default:
       return "\u25A0";
   }

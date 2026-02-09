@@ -7,6 +7,7 @@ import type {
   ShapeRectData,
   ShapeEllipseData,
   RasterImageData,
+  TextData,
 } from "../../types/document";
 
 type AlignType = "left" | "right" | "top" | "bottom" | "centerH" | "centerV";
@@ -473,6 +474,71 @@ function ObjectProperties({
             <span className="text-xs text-gray-400">
               {(object.data as RasterImageData).height}
             </span>
+          </div>
+        </Section>
+      )}
+
+      {object.type === "Text" && (
+        <Section title="Text">
+          <div className="mb-2">
+            <span className="mb-1 block text-xs text-gray-500">Content</span>
+            <textarea
+              value={(object.data as TextData).content}
+              onChange={(e) =>
+                onDataUpdate?.(object.id, { content: e.target.value })
+              }
+              onKeyDown={(e) => e.stopPropagation()}
+              disabled={isLocked}
+              rows={2}
+              className={`w-full rounded border border-gray-700 bg-gray-800 px-1.5 py-1 text-xs text-gray-300 focus:border-blue-500 focus:outline-none ${isLocked ? "opacity-50 cursor-not-allowed" : ""}`}
+            />
+          </div>
+          <EditablePropRow
+            label="Font Size"
+            value={(object.data as TextData).fontSize.toFixed(0)}
+            onChange={(v) =>
+              onDataUpdate?.(object.id, { fontSize: parseFloat(v) || 16 })
+            }
+            type="number"
+            disabled={isLocked}
+          />
+          <EditablePropRow
+            label="Font"
+            value={(object.data as TextData).fontFamily}
+            onChange={(v) => onDataUpdate?.(object.id, { fontFamily: v })}
+            type="text"
+            disabled={isLocked}
+          />
+          <div className="mb-1 flex items-center justify-between">
+            <span className="text-xs text-gray-500">Weight</span>
+            <select
+              value={(object.data as TextData).fontWeight}
+              onChange={(e) =>
+                onDataUpdate?.(object.id, { fontWeight: e.target.value })
+              }
+              onKeyDown={(e) => e.stopPropagation()}
+              disabled={isLocked}
+              className={`w-20 rounded border border-gray-700 bg-gray-800 px-1 py-0.5 text-xs text-gray-300 focus:border-blue-500 focus:outline-none ${isLocked ? "opacity-50 cursor-not-allowed" : ""}`}
+            >
+              <option value="normal">Normal</option>
+              <option value="bold">Bold</option>
+            </select>
+          </div>
+          <div className="mb-1 flex items-center justify-between">
+            <span className="text-xs text-gray-500">Align</span>
+            <select
+              value={(object.data as TextData).textAlign}
+              onChange={(e) =>
+                onDataUpdate?.(object.id, { textAlign: e.target.value })
+              }
+              onKeyDown={(e) => e.stopPropagation()}
+              disabled={isLocked}
+              className={`w-20 rounded border border-gray-700 bg-gray-800 px-1 py-0.5 text-xs text-gray-300 focus:border-blue-500 focus:outline-none ${isLocked ? "opacity-50 cursor-not-allowed" : ""}`}
+            >
+              <option value="left">Left</option>
+              <option value="center">Center</option>
+              <option value="right">Right</option>
+            </select>
           </div>
         </Section>
       )}

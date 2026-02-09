@@ -228,6 +228,7 @@ export function EditorPage() {
           o: "ellipse",
           p: "pen",
           l: "line",
+          t: "text",
           h: "hand",
           s: "shear",
           z: "zoom",
@@ -1363,39 +1364,81 @@ export function EditorPage() {
       const defaultSize = 100;
 
       // Build the new object based on tool type
-      // Anchor point differs by shape type:
-      // - Rectangles: path is (0,0) to (w,h), so anchor at center is (w/2, h/2)
-      // - Ellipses: path is centered at (0,0), so anchor at center is (0, 0)
-      const isEllipse = tool === "ellipse";
-      const newObject: ObjectNode = {
-        id: objectId,
-        type: isEllipse ? "ShapeEllipse" : "ShapeRect",
-        parent: scene.root,
-        children: [],
-        transform: {
-          x: x - defaultSize / 2,
-          y: y - defaultSize / 2,
-          sx: 1,
-          sy: 1,
-          r: 0,
-          ax: isEllipse ? 0 : defaultSize / 2,
-          ay: isEllipse ? 0 : defaultSize / 2,
-          skewX: 0,
-          skewY: 0,
-        },
-        style: {
-          fill: "#4a90d9",
-          stroke: "#2d5a87",
-          strokeWidth: 2,
-          opacity: 1,
-        },
-        visible: true,
-        locked: false,
-        data:
-          tool === "rect"
-            ? { width: defaultSize, height: defaultSize }
-            : { rx: defaultSize / 2, ry: defaultSize / 2 },
-      };
+      let newObject: ObjectNode;
+
+      if (tool === "text") {
+        // Anchor at center of text bounds (heuristic: width ≈ fontSize * 0.6 * len, height ≈ fontSize * 1.2)
+        const defaultContent = "Text";
+        const defaultFontSize = 32;
+        const estWidth = defaultFontSize * 0.6 * defaultContent.length;
+        const estHeight = defaultFontSize * 1.2;
+        newObject = {
+          id: objectId,
+          type: "Text",
+          parent: scene.root,
+          children: [],
+          transform: {
+            x,
+            y,
+            sx: 1,
+            sy: 1,
+            r: 0,
+            ax: estWidth / 2,
+            ay: estHeight / 2,
+            skewX: 0,
+            skewY: 0,
+          },
+          style: {
+            fill: "#000000",
+            stroke: "none",
+            strokeWidth: 0,
+            opacity: 1,
+          },
+          visible: true,
+          locked: false,
+          data: {
+            content: defaultContent,
+            fontSize: defaultFontSize,
+            fontFamily: "sans-serif",
+            fontWeight: "normal" as const,
+            textAlign: "left" as const,
+          },
+        };
+      } else {
+        // Anchor point differs by shape type:
+        // - Rectangles: path is (0,0) to (w,h), so anchor at center is (w/2, h/2)
+        // - Ellipses: path is centered at (0,0), so anchor at center is (0, 0)
+        const isEllipse = tool === "ellipse";
+        newObject = {
+          id: objectId,
+          type: isEllipse ? "ShapeEllipse" : "ShapeRect",
+          parent: scene.root,
+          children: [],
+          transform: {
+            x: x - defaultSize / 2,
+            y: y - defaultSize / 2,
+            sx: 1,
+            sy: 1,
+            r: 0,
+            ax: isEllipse ? 0 : defaultSize / 2,
+            ay: isEllipse ? 0 : defaultSize / 2,
+            skewX: 0,
+            skewY: 0,
+          },
+          style: {
+            fill: "#4a90d9",
+            stroke: "#2d5a87",
+            strokeWidth: 2,
+            opacity: 1,
+          },
+          visible: true,
+          locked: false,
+          data:
+            tool === "rect"
+              ? { width: defaultSize, height: defaultSize }
+              : { rx: defaultSize / 2, ry: defaultSize / 2 },
+        };
+      }
 
       commandDispatcher.dispatch({
         type: "object.create",

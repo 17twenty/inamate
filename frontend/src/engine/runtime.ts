@@ -213,6 +213,35 @@ export const RUNTIME_JS = `
       ctx.restore();
     }
 
+    // Render Text
+    if (obj.type === 'Text' && obj.data && obj.data.content) {
+      var d = obj.data;
+      if (ov) {
+        var td = {};
+        for (var dk in d) td[dk] = d[dk];
+        for (var ok in ov) {
+          if (ok.indexOf('data.') === 0) td[ok.slice(5)] = ov[ok];
+        }
+        d = td;
+      }
+      ctx.save();
+      ctx.transform(worldM[0], worldM[1], worldM[2], worldM[3], worldM[4], worldM[5]);
+      ctx.globalAlpha = opacity;
+      ctx.font = (d.fontWeight || 'normal') + ' ' + (d.fontSize || 16) + 'px ' + (d.fontFamily || 'sans-serif');
+      ctx.textAlign = d.textAlign || 'left';
+      ctx.textBaseline = 'top';
+      if (style.fill && style.fill !== 'none') {
+        ctx.fillStyle = style.fill;
+        ctx.fillText(d.content, 0, 0);
+      }
+      if (style.stroke && style.stroke !== 'none' && style.strokeWidth > 0) {
+        ctx.strokeStyle = style.stroke;
+        ctx.lineWidth = style.strokeWidth;
+        ctx.strokeText(d.content, 0, 0);
+      }
+      ctx.restore();
+    }
+
     // Render RasterImage
     if (obj.type === 'RasterImage' && obj.data && obj.data.assetId) {
       var asset = doc.assets[obj.data.assetId];

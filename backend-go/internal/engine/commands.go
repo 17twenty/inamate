@@ -18,6 +18,13 @@ type DrawCommand struct {
 	ImageAssetID string        `json:"imageAssetId,omitempty"` // Asset ID for image lookup
 	ImageWidth   float64       `json:"imageWidth,omitempty"`   // Image natural width
 	ImageHeight  float64       `json:"imageHeight,omitempty"`  // Image natural height
+
+	// Text rendering
+	TextContent    string  `json:"textContent,omitempty"`
+	TextFontSize   float64 `json:"textFontSize,omitempty"`
+	TextFontFamily string  `json:"textFontFamily,omitempty"`
+	TextFontWeight string  `json:"textFontWeight,omitempty"`
+	TextAlign      string  `json:"textAlign,omitempty"`
 }
 
 // CompileDrawCommands generates a draw command buffer from a scene graph.
@@ -53,7 +60,23 @@ func compileNode(node *SceneNode, commands *[]DrawCommand) {
 	}
 
 	// If this node has renderable content, emit a draw command
-	if node.Type == "image" && node.ImageAssetID != "" {
+	if node.Type == "text" && node.TextContent != "" {
+		cmd := DrawCommand{
+			Op:             "text",
+			ObjectID:       node.ID,
+			Transform:      node.WorldTransform.ToSlice(),
+			Opacity:        node.Opacity,
+			Fill:           node.Fill,
+			Stroke:         node.Stroke,
+			StrokeWidth:    node.StrokeWidth,
+			TextContent:    node.TextContent,
+			TextFontSize:   node.TextFontSize,
+			TextFontFamily: node.TextFontFamily,
+			TextFontWeight: node.TextFontWeight,
+			TextAlign:      node.TextAlign,
+		}
+		*commands = append(*commands, cmd)
+	} else if node.Type == "image" && node.ImageAssetID != "" {
 		cmd := DrawCommand{
 			Op:           "image",
 			ObjectID:     node.ID,
@@ -130,8 +153,8 @@ func hitTestNode(node *SceneNode, x, y float64) string {
 		}
 	}
 
-	// Test this node if it has bounds and renderable content (path or image)
-	if (len(node.Path) > 0 || node.Type == "image") && !node.Bounds.IsEmpty() {
+	// Test this node if it has bounds and renderable content (path, image, or text)
+	if (len(node.Path) > 0 || node.Type == "image" || node.Type == "text") && !node.Bounds.IsEmpty() {
 		if node.Bounds.Contains(x, y) {
 			return node.ID
 		}

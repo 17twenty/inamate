@@ -40,6 +40,13 @@ type SceneNode struct {
 	ImageWidth   float64
 	ImageHeight  float64
 
+	// Text data (for Text nodes)
+	TextContent    string
+	TextFontSize   float64
+	TextFontFamily string
+	TextFontWeight string
+	TextAlign      string
+
 	// Hit testing
 	Bounds Rect // axis-aligned bounding box in world space
 }

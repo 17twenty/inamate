@@ -510,9 +510,11 @@ export function CanvasViewport({
         }
       }
 
-      // Creation tools (shapes)
+      // Creation tools (shapes and text)
       if (
-        (activeTool === "rect" || activeTool === "ellipse") &&
+        (activeTool === "rect" ||
+          activeTool === "ellipse" ||
+          activeTool === "text") &&
         onCreateObject
       ) {
         onCreateObject(x, y, activeTool);
@@ -877,7 +879,12 @@ export function CanvasViewport({
       return "grabbing";
     }
     if (activeTool === "hand" || spaceHeld) return "grab";
-    if (activeTool === "rect" || activeTool === "ellipse") return "crosshair";
+    if (
+      activeTool === "rect" ||
+      activeTool === "ellipse" ||
+      activeTool === "text"
+    )
+      return "crosshair";
     if (activeTool === "pen") return "crosshair";
     if (activeTool === "subselect") return "default";
     if (activeTool === "zoom") return "zoom-in";

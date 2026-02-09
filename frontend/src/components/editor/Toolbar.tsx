@@ -7,6 +7,7 @@ export type Tool =
   | "ellipse"
   | "pen"
   | "line"
+  | "text"
   | "hand"
   | "shear"
   | "zoom";
@@ -103,6 +104,22 @@ const icons: Record<Tool, ReactNode> = {
       <line x1="3" y1="15" x2="15" y2="3" />
     </svg>
   ),
+  text: (
+    <svg
+      width={iconSize}
+      height={iconSize}
+      viewBox="0 0 18 18"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.5"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <path d="M4 4h10" />
+      <path d="M9 4v11" />
+      <path d="M6.5 15h5" />
+    </svg>
+  ),
   hand: (
     <svg
       width={iconSize}
@@ -162,6 +179,7 @@ const tools: { id: Tool; label: string }[] = [
   { id: "ellipse", label: "Ellipse (O)" },
   { id: "pen", label: "Pen (P)" },
   { id: "line", label: "Line (L)" },
+  { id: "text", label: "Text (T)" },
   { id: "shear", label: "Shear (S)" },
   { id: "zoom", label: "Zoom (Z)" },
   { id: "hand", label: "Hand (H)" },

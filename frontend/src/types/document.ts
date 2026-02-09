@@ -35,7 +35,8 @@ export type ObjectType =
   | "ShapeEllipse"
   | "VectorPath"
   | "RasterImage"
-  | "Symbol";
+  | "Symbol"
+  | "Text";
 
 export interface Transform {
   x: number;
@@ -71,6 +72,7 @@ export interface ObjectNode {
     | ShapeEllipseData
     | RasterImageData
     | SymbolData
+    | TextData
     | Record<string, never>;
 }
 
@@ -103,6 +105,14 @@ export interface RasterImageData {
 
 export interface SymbolData {
   timelineId: string;
+}
+
+export interface TextData {
+  content: string;
+  fontSize: number;
+  fontFamily: string;
+  fontWeight: "normal" | "bold";
+  textAlign: "left" | "center" | "right";
 }
 
 export interface Timeline {

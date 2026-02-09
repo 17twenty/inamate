@@ -169,6 +169,68 @@ func buildNode(
 			node.Bounds = Rect{X: bMinX, Y: bMinY, Width: bMaxX - bMinX, Height: bMaxY - bMinY}
 		}
 
+	case document.ObjectTypeText:
+		node.Type = "text"
+		var textData struct {
+			Content    string  `json:"content"`
+			FontSize   float64 `json:"fontSize"`
+			FontFamily string  `json:"fontFamily"`
+			FontWeight string  `json:"fontWeight"`
+			TextAlign  string  `json:"textAlign"`
+		}
+		if err := json.Unmarshal(obj.Data, &textData); err == nil {
+			// Apply data.* keyframe overrides
+			if numOv, ok := eval.Numeric[obj.ID]; ok {
+				if v, ok := numOv["data.fontSize"]; ok {
+					textData.FontSize = v
+				}
+			}
+			if strOv, ok := eval.Strings[obj.ID]; ok {
+				if v, ok := strOv["data.content"]; ok {
+					textData.Content = v
+				}
+				if v, ok := strOv["data.fontFamily"]; ok {
+					textData.FontFamily = v
+				}
+				if v, ok := strOv["data.fontWeight"]; ok {
+					textData.FontWeight = v
+				}
+				if v, ok := strOv["data.textAlign"]; ok {
+					textData.TextAlign = v
+				}
+			}
+
+			node.TextContent = textData.Content
+			node.TextFontSize = textData.FontSize
+			node.TextFontFamily = textData.FontFamily
+			node.TextFontWeight = textData.FontWeight
+			node.TextAlign = textData.TextAlign
+
+			// Heuristic bounds (frontend uses measureText for accurate bounds)
+			estWidth := textData.FontSize * 0.6 * float64(len(textData.Content))
+			estHeight := textData.FontSize * 1.2
+			corners := [][2]float64{
+				{0, 0},
+				{estWidth, 0},
+				{estWidth, estHeight},
+				{0, estHeight},
+			}
+			var bMinX, bMinY, bMaxX, bMaxY float64
+			for i, c := range corners {
+				wx, wy := worldMatrix.TransformPoint(c[0], c[1])
+				if i == 0 {
+					bMinX, bMaxX = wx, wx
+					bMinY, bMaxY = wy, wy
+				} else {
+					bMinX = math.Min(bMinX, wx)
+					bMaxX = math.Max(bMaxX, wx)
+					bMinY = math.Min(bMinY, wy)
+					bMaxY = math.Max(bMaxY, wy)
+				}
+			}
+			node.Bounds = Rect{X: bMinX, Y: bMinY, Width: bMaxX - bMinX, Height: bMaxY - bMinY}
+		}
+
 	case document.ObjectTypeSymbol:
 		// Symbol timeline already evaluated above before applying overrides
 	}
@@ -208,6 +270,8 @@ func mapObjectType(objType document.ObjectType) string {
 		return "symbol"
 	case document.ObjectTypeRasterImage:
 		return "image"
+	case document.ObjectTypeText:
+		return "text"
 	default:
 		return "unknown"
 	}

@@ -172,3 +172,7 @@ vite.config.ts.timestamp-*
 .vite/
 /design-assets
 backend-go/server
+
+# Generated WASM engine (rebuilt via `task wasm:build`)
+frontend/public/engine.wasm
+*.wasm

@@ -104,7 +104,7 @@ tasks:
   # --- Combined ---
   dev:
     desc: Start everything (infra + backend + frontend)
-    deps: [infra]
+    deps: [infra, wasm:build]
     cmds:
       - task --parallel backend frontend
 
