@@ -328,15 +328,24 @@ func ApplyStringOverridesToStyle(base document.Style, overrides StringPropertyOv
 	return result
 }
 
+// SymbolDataParsed holds the parsed fields from a Symbol's data JSON.
+type SymbolDataParsed struct {
+	TimelineID string `json:"timelineId"`
+	Loop       bool   `json:"loop"`
+}
+
+// ParseSymbolData extracts parsed symbol data from a Symbol's JSON data.
+func ParseSymbolData(data json.RawMessage) SymbolDataParsed {
+	var sd SymbolDataParsed
+	if err := json.Unmarshal(data, &sd); err != nil {
+		return SymbolDataParsed{}
+	}
+	return sd
+}
+
 // GetSymbolTimelineID extracts the timeline ID from a Symbol's data.
 func GetSymbolTimelineID(data json.RawMessage) string {
-	var symbolData struct {
-		TimelineID string `json:"timelineId"`
-	}
-	if err := json.Unmarshal(data, &symbolData); err != nil {
-		return ""
-	}
-	return symbolData.TimelineID
+	return ParseSymbolData(data).TimelineID
 }
 
 // IsTransformProperty checks if a property path is a transform property.

@@ -256,7 +256,14 @@ export const RUNTIME_JS = `
 
     // Evaluate Symbol nested timeline
     if (obj.type === 'Symbol' && obj.data && obj.data.timelineId) {
-      var symOverrides = evaluateTimeline(doc, obj.data.timelineId, frame);
+      var symFrame = frame;
+      if (obj.data.loop) {
+        var symTl = doc.timelines[obj.data.timelineId];
+        if (symTl && symTl.length > 0) {
+          symFrame = frame % symTl.length;
+        }
+      }
+      var symOverrides = evaluateTimeline(doc, obj.data.timelineId, symFrame);
       for (var symObjId in symOverrides) {
         if (!overrides[symObjId]) overrides[symObjId] = {};
         for (var symKey in symOverrides[symObjId]) {

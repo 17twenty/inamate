@@ -8,6 +8,7 @@ import type {
   ShapeEllipseData,
   RasterImageData,
   TextData,
+  SymbolData,
 } from "../../types/document";
 
 type AlignType = "left" | "right" | "top" | "bottom" | "centerH" | "centerV";
@@ -459,6 +460,22 @@ function ObjectProperties({
             type="number"
             disabled={isLocked}
           />
+        </Section>
+      )}
+      {object.type === "Symbol" && (
+        <Section title="Symbol">
+          <div className="mb-1 flex items-center justify-between">
+            <span className="text-xs text-gray-500">Loop</span>
+            <input
+              type="checkbox"
+              checked={(object.data as SymbolData)?.loop ?? false}
+              onChange={(e) =>
+                onDataUpdate?.(object.id, { loop: e.target.checked })
+              }
+              disabled={isLocked}
+              className={`h-3.5 w-3.5 rounded border-gray-600 bg-gray-800 text-blue-500 focus:ring-blue-500 focus:ring-offset-0 ${isLocked ? "opacity-50 cursor-not-allowed" : ""}`}
+            />
+          </div>
         </Section>
       )}
       {object.type === "RasterImage" && (

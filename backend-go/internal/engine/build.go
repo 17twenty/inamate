@@ -53,10 +53,17 @@ func buildNode(
 	// For Symbols, evaluate their nested timeline FIRST so overrides apply to the Symbol itself
 	// Only evaluate when playing
 	if playing && obj.Type == document.ObjectTypeSymbol {
-		symbolTimelineID := GetSymbolTimelineID(obj.Data)
-		if symbolTimelineID != "" {
+		symData := ParseSymbolData(obj.Data)
+		if symData.TimelineID != "" {
+			// Apply loop: wrap frame around timeline length
+			symFrame := frame
+			if symData.Loop {
+				if tl, ok := doc.Timelines[symData.TimelineID]; ok && tl.Length > 0 {
+					symFrame = frame % tl.Length
+				}
+			}
 			// Evaluate the symbol's timeline and merge overrides
-			symbolEval := EvaluateTimeline(doc, symbolTimelineID, frame)
+			symbolEval := EvaluateTimeline(doc, symData.TimelineID, symFrame)
 			for objID, props := range symbolEval.Numeric {
 				if eval.Numeric[objID] == nil {
 					eval.Numeric[objID] = make(PropertyOverrides)

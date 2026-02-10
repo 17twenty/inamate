@@ -105,6 +105,7 @@ export interface RasterImageData {
 
 export interface SymbolData {
   timelineId: string;
+  loop?: boolean;
 }
 
 export interface TextData {
