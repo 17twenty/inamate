@@ -99,26 +99,39 @@ User Action → commandDispatcher.dispatch(operation)
 
 This project is developed in phases, with each phase building on the last.
 
-### Phase 1: MVP (The Foundation) - *In Progress*
+### Phase 1: MVP (The Foundation) - *Complete*
 
 *Goal: A solo animator can create and export a complete short animation.*
 
-- [x] Core vector drawing engine
-- [x] Timeline with layers and keyframes
-- [x] Transform animations (position, scale, rotation)
-- [x] Real-time collaboration via WebSocket
-- [ ] Onion skinning
-- [ ] Editable easing curves
+- [x] Core vector drawing engine (bezier paths, shapes, strokes)
+- [x] Timeline with layers, keyframes, and frame scrubbing
+- [x] Transform animations (position, scale, rotation, skew, anchor)
+- [x] Real-time collaboration via WebSocket (presence, cursors, locking)
+- [x] Onion skinning (previous frames blue, next frames orange, configurable depth)
+- [x] Easing curves (12 presets: linear, easeIn/Out, cubic, back, elastic, bounce)
+- [x] Export to PNG, PNG sequence, MP4, GIF, WebM, and HTML
+- [x] Undo/redo (per-user local stacks)
+- [ ] Editable cubic bezier easing curves (custom curve editor UI)
 - [ ] Mask layers
-- [ ] Export to PNG sequence and MP4 video
 
-### Phase 2: Character Animation
+### Phase 2: Character Animation - *In Progress*
 
 *Goal: Make Inamate a compelling choice for character animators.*
 
-- Approachable Rigging: Bones (FK/IK), auto-weighting, and visual controls
-- Switch/Pose Layers: For managing mouths, hands, and expressions
-- Graph Editor: Fine-grained control over animation curves and timing
+- [x] Symbols/Components with nested timelines
+- [x] Text tool (animatable font size, family, weight, alignment)
+- [x] SVG import (path, rect, ellipse, circle, line, polygon, polyline)
+- [x] Group selection and animation (click selects group, double-click enters)
+- [x] Grid overlay and snap-to-grid (dot grid, configurable sizes)
+- [x] Copy/paste, duplicate, arrow key nudge
+- [x] Alignment and distribution tools
+- [x] Multi-scene support with scene tabs
+- [x] Image paste and drag-drop (raster placement)
+- [ ] Approachable Rigging: Bones (FK/IK), auto-weighting, and visual controls
+- [ ] Switch/Pose Layers: For managing mouths, hands, and expressions
+- [ ] Graph Editor: Fine-grained control over animation curves and timing
+- [ ] Audio placement on timeline
+- [ ] Comments and annotations
 
 ### Phase 3: Power & Scale
 
